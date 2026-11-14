@@ -12,12 +12,54 @@ const LABELS = {
 };
 const MOSCOW = {lat: 55.7519, lon: 37.6176};
 
-async function telegramSession() {
-  const tg = window.Telegram?.WebApp;
-  if (!tg?.initData) return null;
-  tg.ready(); tg.expand();
-  return makeApi(() => '')('/api/auth/telegram', {method: 'POST', body: JSON.stringify({init_data: tg.initData})});
+function isTelegramLaunch() {
+  const params = new URLSearchParams(location.hash.slice(1));
+  return !!window.Telegram?.WebApp?.initData || params.has('tgWebAppData') || params.has('tgWebAppPlatform');
 }
+let telegramLoading;
+function loadTelegram() {
+  if (window.Telegram?.WebApp) return Promise.resolve(window.Telegram.WebApp);
+  if (!isTelegramLaunch()) return Promise.resolve(null);
+  if (telegramLoading) return telegramLoading;
+  telegramLoading = new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = 'https://telegram.org/js/telegram-web-app.js'; script.async = true;
+    const finish = error => {
+      clearTimeout(timer); script.onload = script.onerror = null;
+      if (error) { script.remove(); reject(error) }
+      else if (window.Telegram?.WebApp) resolve(window.Telegram.WebApp);
+      else reject(new Error('Telegram не передал данные приложения. Откройте его снова.'));
+    };
+    const timer = setTimeout(() => finish(new Error('Telegram отвечает слишком долго. Повторите подключение.')), 6000);
+    script.onload = () => finish();
+    script.onerror = () => finish(new Error('Не удалось подключиться к Telegram. Повторите попытку.'));
+    document.head.append(script);
+  }).catch(error => { telegramLoading = null; throw error });
+  return telegramLoading;
+}
+async function telegramSession() {
+  const tg = await loadTelegram();
+  if (!tg?.initData) {
+    if (isTelegramLaunch()) throw new Error('Откройте приложение заново через кнопку бота.');
+    return null;
+  }
+  // Remove Telegram's native loading screen as soon as our shell is ready.
+  tg.ready(); tg.expand();
+  return makeApi(() => '')('/api/auth/telegram', {method: 'POST', timeoutMs: 10000, body: JSON.stringify({init_data: tg.initData})});
+}
+async function restoreSession(api, token) {
+  const telegram = await telegramSession();
+  if (telegram) return telegram; // The signed login already returns the user.
+  if (!token) return null;
+  try { return {token, user: await api('/api/auth/me', {timeoutMs: 10000})} }
+  catch (error) { if (error.status === 401) return null; throw error }
+}
+function showBoot(message = 'Открываем NewsRadar…', failed = false) {
+  $('boot').classList.remove('hidden'); $('bootMessage').textContent = message;
+  $('bootRetry').classList.toggle('hidden', !failed);
+  $('bootRetry').onclick = () => location.reload();
+}
+function hideBoot() { $('boot').classList.add('hidden') }
 
 // ---------- Тема: «как в системе» по умолчанию, выбор хранится в браузере ----------
 const systemDark = matchMedia('(prefers-color-scheme: dark)');
@@ -63,15 +105,29 @@ function toast(message, bad = false) {
 
 function makeApi(getToken) {
   return async (url, options = {}) => {
-    const headers = {...(options.body instanceof FormData ? {} : {'Content-Type': 'application/json'}), ...(getToken() ? {'X-Session': getToken()} : {}), ...(options.headers || {})};
-    const response = await fetch(url, {...options, headers});
-    let data; try { data = await response.json() } catch { data = {detail: 'Ошибка сервера'} }
-    if (!response.ok) {
-      let message = data.detail || 'Ошибка запроса';
-      if (Array.isArray(message)) message = message.map(x => x.msg).join('; ');
-      throw Object.assign(new Error(message), {status: response.status});
+    const {timeoutMs = 30000, signal, ...request} = options;
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    if (signal?.aborted) abort(); else signal?.addEventListener('abort', abort, {once: true});
+    const timer = setTimeout(abort, timeoutMs);
+    const headers = {...(request.body instanceof FormData ? {} : {'Content-Type': 'application/json'}), ...(getToken() ? {'X-Session': getToken()} : {}), ...(request.headers || {})};
+    try {
+      const response = await fetch(url, {...request, signal: controller.signal, headers});
+      let data;
+      try { data = await response.json() }
+      catch (error) { if (controller.signal.aborted) throw error; data = {detail: 'Ошибка сервера'} }
+      if (!response.ok) {
+        let message = data.detail || 'Ошибка запроса';
+        if (Array.isArray(message)) message = message.map(x => x.msg).join('; ');
+        throw Object.assign(new Error(message), {status: response.status});
+      }
+      return data;
+    } catch (error) {
+      if (controller.signal.aborted) throw new Error('Сервер отвечает слишком долго. Повторите попытку.');
+      throw error;
+    } finally {
+      clearTimeout(timer); signal?.removeEventListener('abort', abort);
     }
-    return data;
   };
 }
 
@@ -86,15 +142,15 @@ function radar(el, blips = 6) {
 }
 
 // ---------- Карта: Leaflet + тайлы OpenStreetMap, ключ API не нужен ----------
-const LEAFLET = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet';
+const LEAFLET = '/static/vendor/leaflet-1.9.4/leaflet';
 let leafletLoading;
 function loadLeaflet() {
   return leafletLoading ||= new Promise((resolve, reject) => {
     const css = Object.assign(document.createElement('link'), {rel: 'stylesheet', href: LEAFLET + '.css', integrity: 'sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=', crossOrigin: ''});
     const js = Object.assign(document.createElement('script'), {src: LEAFLET + '.js', integrity: 'sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=', crossOrigin: '', async: true});
-    js.onload = resolve;
-    js.onerror = () => reject(new Error('не удалось загрузить библиотеку карты'));
-    setTimeout(() => reject(new Error('превышено время загрузки')), 12000);
+    const timer = setTimeout(() => reject(new Error('превышено время загрузки')), 6000);
+    js.onload = () => { clearTimeout(timer); resolve() };
+    js.onerror = () => { clearTimeout(timer); reject(new Error('не удалось загрузить библиотеку карты')) };
     document.head.append(css, js);
   });
 }

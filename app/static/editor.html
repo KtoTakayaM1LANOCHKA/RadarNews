@@ -1,8 +1,11 @@
 <!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>NewsRadar — редакция</title>
-<link rel="stylesheet" href="/static/ui.css"><script src="https://telegram.org/js/telegram-web-app.js" defer></script><script src="/static/ui.js"></script></head>
+<link rel="stylesheet" href="/static/ui.css?v=0.2.1"><script src="/static/ui.js?v=0.2.1" defer></script></head>
 <body>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
+<section id="boot" class="auth" aria-label="Загрузка приложения">
+  <div class="card auth-card center"><h1>NewsRadar</h1><p id="bootMessage" role="status" aria-live="polite">Открываем приложение…</p><button id="bootRetry" class="btn primary hidden">Повторить попытку</button></div>
+</section>
 
 <section id="login" class="auth hidden">
   <div class="card auth-card pop">
@@ -91,5 +94,5 @@
     <p class="muted tiny" style="margin-top:24px">NewsRadar MVP · анализ помогает редактору, но не заменяет проверку фактов человеком.</p>
   </div>
 </div>
-<script src="/static/editor.js" defer></script>
+<script src="/static/editor.js?v=0.2.1" defer></script>
 </body></html>

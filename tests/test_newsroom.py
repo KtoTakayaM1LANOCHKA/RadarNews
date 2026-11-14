@@ -326,3 +326,19 @@ def test_publication_with_verified_location(api,accounts):
     r=api.post(f'/api/editor/events/{eid}/decision',headers=accounts['editor']['headers'],json={'action':'publish','note':'Проверено редактором','latitude':55.7519,'longitude':37.6176})
     assert r.status_code==200, r.text
     assert any(e['id']==eid for e in api.get('/api/events?lat=55.7519&lon=37.6176').json()['items'])
+
+
+def test_compressed_and_versioned_assets(api):
+    version = api.get('/health').json()['version']
+    html = api.get('/')
+    assert html.headers['cache-control'] == 'no-cache'
+    assert f'/static/app.js?v={version}' in html.text
+    assert 'telegram.org/js/telegram-web-app.js' not in html.text
+    assert 'id="boot"' in html.text
+    js = api.get(f'/static/app.js?v={version}', headers={'Accept-Encoding':'gzip'})
+    assert js.headers['content-encoding'] == 'gzip'
+    assert 'immutable' in js.headers['cache-control']
+    assert api.get('/static/app.js').headers['cache-control'] == 'no-cache'
+    assert api.get('/static/app.js?v=old').headers['cache-control'] == 'no-cache'
+    vendor = api.get('/static/vendor/leaflet-1.9.4/leaflet.js')
+    assert vendor.status_code == 200 and 'immutable' in vendor.headers['cache-control']

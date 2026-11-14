@@ -9,34 +9,41 @@ const TABS = ['map', 'send', 'feed', 'profile'];
 const TYPES = [['event', '● Новости'], ['order', '? Нужно подтвердить'], ['ad', '★ Реклама']];
 const GAUGE_MAX = 300;   // баллов до края шкалы репутации
 const signed = n => (n > 0 ? '+' : '') + n;
+let rulesLoading;
+function loadRules() {
+  if (state.rules) return Promise.resolve(state.rules);
+  return rulesLoading ||= api('/api/config', {timeoutMs: 10000}).then(d => state.rules = d.rewards)
+    .catch(error => { rulesLoading = null; throw error });
+}
 
 // ---------- Вход и регистрация сразу при открытии ----------
 function setToken(token) { state.token = token; store.set('nr_user_session', token || null) }
 async function start() {
   radar($('authRadar'), 7); radar($('logoRadar'), 2); radar($('sendRadar'), 8);
-  state.rules = (await api('/api/config').catch(() => ({}))).rewards;
+  showBoot(isTelegramLaunch() ? 'Входим через Telegram…' : 'Открываем NewsRadar…');
+  loadRules().catch(() => {}); // Settings must not delay the map or login.
   try {
-    const session = await telegramSession();
+    const session = await restoreSession(api, state.token);
     if (session) { setToken(session.token); state.user = session.user }
-  } catch (err) { toast(err.message, true) }
-  if (state.token) {
-    try { state.user = await api('/api/auth/me') } catch { setToken('') }
-  }
+    else { setToken(''); state.user = null }
+  } catch (err) { showBoot(err.message, true); return }
   if (state.user?.id) enter(); else showAuth();
 }
 function showAuth() {
+  hideBoot();
   state.user = null;
   $('app').classList.add('hidden'); $('tabbar').classList.add('hidden'); $('auth').classList.remove('hidden');
   $('codeForm').classList.add('hidden'); $('phoneForm').classList.remove('hidden');
 }
 function enter() {
+  hideBoot();
   const editorEvent = new URLSearchParams(location.search).get('editor_event');
   if (['editor', 'admin'].includes(state.user.role) && /^\d+$/.test(editorEvent || '')) {
     location.replace('/editor#event/' + editorEvent); return;
   }
   $('auth').classList.add('hidden'); $('app').classList.remove('hidden'); $('tabbar').classList.remove('hidden');
   paintAvatar(); route();
-  if (!state.started) { state.started = true; initMap().then(() => locate(true)) }
+  if (!state.started) { state.started = true; initMap(); if (!isTelegramLaunch()) locate(true) }
 }
 $('phoneForm').onsubmit = async e => {
   e.preventDefault();
@@ -85,6 +92,7 @@ addEventListener('keydown', e => { if (e.key === 'Escape') { closeModal(); choos
 async function initMap() {
   try {
     state.map = await createMap($('map'), state.center);
+    if (state.myLoc) showMe(state.map, state.myLoc);
     $('mapStatus').textContent = 'Нажмите на значок, чтобы открыть событие';
   } catch (err) {
     $('map').parentElement.classList.add('hidden');
@@ -196,7 +204,7 @@ function gauge(points) {   // стрелка: 0 — по центру, плюс 
 }
 async function renderProfile() {
   let d;
-  try { d = await api('/api/my/submissions') } catch (err) { if (err.status === 401) { setToken(''); return showAuth() } return toast(err.message, true) }
+  try { [d] = await Promise.all([api('/api/my/submissions'), loadRules()]) } catch (err) { if (err.status === 401) { setToken(''); return showAuth() } return toast(err.message, true) }
   const u = state.user = d.user, r = state.rules;
   paintAvatar();
   $('profileBody').innerHTML = `

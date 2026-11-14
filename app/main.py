@@ -26,6 +26,7 @@ from typing import Annotated, Literal
 from fastapi import Body, Depends, FastAPI, File, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.gzip import GZipMiddleware
 from PIL import Image, ImageOps, UnidentifiedImageError
 from app.ai_optional import llm_triage
 from pydantic import BaseModel, Field
@@ -67,7 +68,8 @@ async def lifespan(app):
                 await task
 
 
-app = FastAPI(title='NewsRadar MVP', version='0.2.0', lifespan=lifespan, docs_url='/api/docs', openapi_url='/api/openapi.json')
+app = FastAPI(title='NewsRadar MVP', version='0.2.1', lifespan=lifespan, docs_url='/api/docs', openapi_url='/api/openapi.json')
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 
 @contextmanager
@@ -934,9 +936,11 @@ async def whatsapp_webhook(request:Request):
 
 @app.middleware('http')
 async def revalidate_pages(request: Request, call_next):
-    """Страницы и статика всегда сверяются с сервером, чтобы браузер не показывал старую версию."""
+    """Versioned assets stay in the WebView cache; HTML is always revalidated."""
     response=await call_next(request)
-    if request.url.path in ('/','/editor') or request.url.path.startswith('/static/'):
+    if request.url.path.startswith('/static/') and (request.query_params.get('v') == app.version or request.url.path.startswith('/static/vendor/leaflet-1.9.4/')):
+        response.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
+    elif request.url.path in ('/','/editor') or request.url.path.startswith('/static/'):
         response.headers.setdefault('Cache-Control','no-cache')
     return response
 

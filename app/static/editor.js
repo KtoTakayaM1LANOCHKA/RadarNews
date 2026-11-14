@@ -23,18 +23,26 @@ const fitAll = (map, list) => { const located = list.filter(e => e.location_know
 // ---------- Вход: пароль редактора или сессия администратора из приложения ----------
 async function start() {
   radar($('loginRadar'), 7); radar($('logoRadar'), 2); radar($('promoRadar'), 4);
-  rules = (await api('/api/config').catch(() => ({}))).rewards;
-  try { const session = await telegramSession(); if (session) store.set('nr_user_session', session.token) } catch (err) { toast(err.message, true) }
-  for (const candidate of [store.get('nr_editor_token'), store.get('nr_user_session')]) {
+  showBoot();
+  api('/api/config', {timeoutMs: 10000}).then(d => { rules = d.rewards; if ($('imp')) rewardHint() }).catch(err => toast(err.message, true));
+  let telegram;
+  try { telegram = await telegramSession() } catch (err) { showBoot(err.message, true); return }
+  if (telegram) {
+    store.set('nr_user_session', telegram.token);
+    if (['editor', 'admin'].includes(telegram.user.role)) { token = telegram.token; viaApp = true; return enter() }
+    token = ''; hideBoot(); $('login').classList.remove('hidden'); return;
+  }
+  for (const candidate of new Set([store.get('nr_editor_token'), store.get('nr_user_session')])) {
     if (!candidate) continue;
     token = candidate;
     try {
-      if (['editor', 'admin'].includes((await api('/api/auth/me')).role)) { viaApp = candidate !== store.get('nr_editor_token'); return enter() }
-    } catch {}
+      if (['editor', 'admin'].includes((await api('/api/auth/me', {timeoutMs: 10000})).role)) { viaApp = candidate !== store.get('nr_editor_token'); return enter() }
+    } catch (err) { if (err.status !== 401 && err.status !== 403) { showBoot(err.message, true); return } }
   }
-  token = ''; $('login').classList.remove('hidden');
+  token = ''; hideBoot(); $('login').classList.remove('hidden');
 }
 function enter() {
+  hideBoot();
   $('login').classList.add('hidden'); $('workspace').classList.remove('hidden');
   document.body.classList.toggle('nav-open', wide() && store.get('nr_nav') !== '0');
   route(); refresh();
@@ -106,6 +114,7 @@ function renderEvents() {
     || '<div class="empty">Новостей не найдено</div>';
 }
 function rewardHint() {
+  if (!rules) { $('rewardHint').textContent = 'Загружаем тарифы вознаграждений…'; return }
   const points = 10 + Math.floor((45 * (+$('imp').value + +$('exc').value) + 50) / 100), tier = rules.tiers.find(t => points >= t.from);
   $('impValue').textContent = $('imp').value; $('excValue').textContent = $('exc').value;
   $('rewardHint').textContent = `Автору за достоверную новость: +${points} баллов и ${tier.money} ₽ (тип «${tier.name}»). За недостоверную: ${rules.false_news} баллов без денег. Начисление — на следующий день.`;
