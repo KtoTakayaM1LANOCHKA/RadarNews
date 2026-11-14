@@ -12,6 +12,13 @@ const LABELS = {
 };
 const MOSCOW = {lat: 55.7519, lon: 37.6176};
 
+async function telegramSession() {
+  const tg = window.Telegram?.WebApp;
+  if (!tg?.initData) return null;
+  tg.ready(); tg.expand();
+  return makeApi(() => '')('/api/auth/telegram', {method: 'POST', body: JSON.stringify({init_data: tg.initData})});
+}
+
 // ---------- Тема: «как в системе» по умолчанию, выбор хранится в браузере ----------
 const systemDark = matchMedia('(prefers-color-scheme: dark)');
 function applyTheme() {
@@ -103,7 +110,7 @@ const eventKind = e => e.promoted ? 'ad' : e.status === 'published' ? 'event' : 
 const pinSize = e => Math.min(46, Math.max(20, 18 + Math.log2(1 + e.popularity) * 2.7 + (e.promoted ? 13 : 0)));
 function drawPins(map, events, onClick, selectedId) {
   map.pins.clearLayers();
-  events.forEach(e => {
+  events.filter(e => e.location_known !== 0).forEach(e => {
     const kind = eventKind(e), size = pinSize(e);
     const icon = L.divIcon({className: 'pin-wrap', iconSize: [size, size], iconAnchor: [size / 2, size / 2],
       html: `<span class="pin ${kind}${e.id === selectedId ? ' selected' : ''}" style="font-size:${size * .5}px">${PIN_ICON[kind] || '●'}</span>`});

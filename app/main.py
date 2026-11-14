@@ -16,7 +16,8 @@ import re
 import secrets
 import sqlite3
 import time
-from contextlib import contextmanager
+import asyncio
+from contextlib import contextmanager, asynccontextmanager, suppress
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from dotenv import load_dotenv
@@ -54,7 +55,19 @@ MIN_WITHDRAW = 100
 MSK = timezone(timedelta(hours=3))
 DB_FILE.parent.mkdir(parents=True, exist_ok=True)
 AVATAR_DIR.mkdir(parents=True, exist_ok=True)
-app = FastAPI(title='NewsRadar MVP', version='0.1.0', docs_url='/api/docs', openapi_url='/api/openapi.json')
+@asynccontextmanager
+async def lifespan(app):
+    task = asyncio.create_task(newsroom.run()) if os.getenv('NEWS_WORKER_ENABLED', '1') == '1' else None
+    try:
+        yield
+    finally:
+        if task:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+
+
+app = FastAPI(title='NewsRadar MVP', version='0.2.0', lifespan=lifespan, docs_url='/api/docs', openapi_url='/api/openapi.json')
 
 
 @contextmanager
@@ -205,9 +218,12 @@ def init_db():
         );
         ''')
         have = {r['name'] for r in con.execute('PRAGMA table_info(users)')}
-        for column, ddl in (('nickname', 'TEXT'), ('avatar', 'TEXT'), ('wallet', 'INTEGER NOT NULL DEFAULT 0')):
+        for column, ddl in (('nickname', 'TEXT'), ('avatar', 'TEXT'), ('wallet', 'INTEGER NOT NULL DEFAULT 0'), ('role', "TEXT NOT NULL DEFAULT 'user'")):
             if column not in have:
                 con.execute(f'ALTER TABLE users ADD COLUMN {column} {ddl}')
+        con.execute("UPDATE users SET role='admin' WHERE phone=?", (ADMIN_PHONE,))
+        if 'location_known' not in {r['name'] for r in con.execute('PRAGMA table_info(events)')}:
+            con.execute('ALTER TABLE events ADD COLUMN location_known INTEGER NOT NULL DEFAULT 1')
         con.execute('UPDATE orders SET reward_points=?', (CONFIRM_POINTS,))
         if con.execute('SELECT count(*) AS n FROM events').fetchone()['n'] == 0:
             seeds = [
@@ -275,6 +291,8 @@ class DecisionIn(BaseModel):
     question: str = Field(default='',max_length=1200)
     importance: int|None = Field(None,ge=0,le=100)
     exclusive_score: int|None = Field(None,ge=0,le=100)
+    latitude: float|None = Field(None,ge=-90,le=90)
+    longitude: float|None = Field(None,ge=-180,le=180)
 
 class ReviewSubmission(BaseModel):
     accepted: bool
@@ -309,7 +327,13 @@ def auth(x_session: Annotated[str|None, Header(alias='X-Session')]=None):
         row=con.execute('SELECT user_id,role,expires_at FROM sessions WHERE token_hash=?',(secret_hash(x_session),)).fetchone()
         if not row or row['expires_at'] < int(time.time()):
             raise HTTPException(401,'Сессия истекла')
-        return dict(row)
+        result = dict(row)
+        if row['user_id'] is not None:
+            user = con.execute('SELECT role FROM users WHERE id=?', (row['user_id'],)).fetchone()
+            if not user:
+                raise HTTPException(401, 'Аккаунт не найден')
+            result['role'] = user['role']
+        return result
 
 
 def editor(session=Depends(auth)):
@@ -319,7 +343,7 @@ def editor(session=Depends(auth)):
 
 
 def member(session=Depends(auth)):
-    if session['role'] not in ('user','admin'):
+    if session['user_id'] is None:
         raise HTTPException(403,'Требуется аккаунт пользователя')
     return session
 
@@ -370,23 +394,31 @@ def verify_code(payload: CodeIn):
             raise HTTPException(400,'Неверный или просроченный код')
         con.execute('DELETE FROM otps WHERE phone=?',(phone,))
         con.execute('INSERT OR IGNORE INTO users(phone,created_at) VALUES(?,?)',(phone,now()))
-        role='admin' if phone==ADMIN_PHONE else 'user'
+        if phone==ADMIN_PHONE:
+            con.execute("UPDATE users SET role='admin' WHERE phone=?", (phone,))
+        role=con.execute('SELECT role FROM users WHERE phone=?',(phone,)).fetchone()['role']
         user=user_view(con,con.execute('SELECT id FROM users WHERE phone=?',(phone,)).fetchone()['id'],role)
     return {'token':make_session(user['id'],role),'user':user}
 
 
 @app.post('/api/editor/login')
-def login_editor(payload: EditorKey):
+def login_editor(payload: EditorKey, x_session: Annotated[str|None, Header(alias='X-Session')]=None):
     if not DEMO_MODE:
         raise HTTPException(503,'Редакторская авторизация для production должна быть подключена отдельно')
     if not hmac.compare_digest(payload.password,EDITOR_PASSWORD):
         raise HTTPException(401,'Неверный пароль редактора')
+    if x_session:
+        session = auth(x_session)
+        if session['user_id'] is not None:
+            with db() as con:
+                con.execute("UPDATE users SET role='editor' WHERE id=? AND role!='admin'", (session['user_id'],))
+            return {'token':x_session,'role':auth(x_session)['role']}
     return {'token':make_session(role='editor'),'role':'editor'}
 
 
 @app.get('/api/auth/me')
 def me(session=Depends(auth)):
-    if session['role']=='editor':
+    if session['user_id'] is None:
         return {'role':'editor'}
     with db() as con:
         return user_view(con,session['user_id'],session['role'])
@@ -454,6 +486,7 @@ def events(status: str|None=None, topic: str|None=None, lat: float|None=None,lon
         for row in con.execute(sql,args):
             d=result_event(con,row)
             if lat is not None:
+                if not d['location_known']:continue
                 d['distance_km']=round(distance_km(lat,lon,d['latitude'],d['longitude']),2)
                 if d['distance_km']>radius:continue
             out.append(d)
@@ -634,9 +667,13 @@ def editor_events(_=Depends(editor)):
 
 @app.post('/api/editor/events/{event_id}/decision')
 def decision(event_id:int,payload: DecisionIn,_=Depends(editor)):
+    if (payload.latitude is None)!=(payload.longitude is None):
+        raise HTTPException(422, 'Координаты передаются парой')
     with db() as con:
         e=con.execute('SELECT * FROM events WHERE id=?',(event_id,)).fetchone()
         if not e:raise HTTPException(404,'Событие не найдено')
+        if payload.latitude is not None:
+            con.execute('UPDATE events SET latitude=?,longitude=?,location_known=1 WHERE id=?', (payload.latitude,payload.longitude,event_id))
         target={'reject':'rejected','publish':'published','revise':'order'}[payload.action]
         # Публикация окончательна. После отклонения новость ещё можно опубликовать.
         if e['status']=='published':
@@ -715,8 +752,16 @@ def event_history(event_id:int,_=Depends(editor)):
 async def discovery(payload: DiscoveryIn,_=Depends(editor)):
     """Optional live web discovery with licensed Brave Search API, no crawling of private chats."""
     key=os.getenv('BRAVE_SEARCH_API_KEY','')
-    if not key: raise HTTPException(503,'Поисковый API не подключён; демо-события доступны без него')
     import httpx
+    if not key:
+        from app.newsroom import fetch_feed, plain, search_url, web_url
+        try:
+            async with httpx.AsyncClient() as client:
+                entries, _ = await fetch_feed(client, search_url(payload.query))
+            return {'query':payload.query, 'items':[{'title':plain(e.get('title'),180), 'url':e.get('link'), 'description':plain(e.get('summary'))} for e in (entries or [])[:8] if web_url(e.get('link',''))],
+                    'provider':'google-news-rss', 'note':'Результаты требуют редакторской проверки'}
+        except Exception as exc:
+            raise HTTPException(502, f'Поиск новостей недоступен ({type(exc).__name__})')
     try:
         async with httpx.AsyncClient(timeout=12) as client:
             response=await client.get('https://api.search.brave.com/res/v1/web/search',params={'q':payload.query,'count':8},headers={'X-Subscription-Token':key,'Accept':'application/json'})
@@ -756,6 +801,7 @@ def import_discovery(payload:ImportDiscovery,_=Depends(editor)):
         cur=con.execute("""INSERT INTO events(title,summary,topic,latitude,longitude,status,verification,source_url,importance,exclusive_score,created_at,updated_at)
             VALUES(?,?,?,?,?,'review','unverified',?,50,65,?,?)""",
             (payload.title,trim(payload.summary,1200),trim(payload.topic,60),payload.latitude,payload.longitude,url,now(),now()))
+        con.execute('UPDATE events SET location_known=0 WHERE id=?', (cur.lastrowid,))
     return {'imported':True,'event_id':cur.lastrowid,'status':'review'}
 
 
@@ -766,6 +812,8 @@ class BotIn(BaseModel):
     text: str = Field(min_length=5,max_length=3000)
     latitude: float|None = Field(None,ge=-90,le=90)
     longitude: float|None = Field(None,ge=-180,le=180)
+    message_id: int|None = None
+    chat_id: int|None = None
 
 
 @app.post('/api/integrations/ingest')
@@ -773,9 +821,19 @@ def ingest_bot(payload: BotIn, x_ingest_key: Annotated[str|None,Header(alias='X-
     expected=os.getenv('INGEST_SECRET','')
     if not expected or not x_ingest_key or not hmac.compare_digest(expected,x_ingest_key):
         raise HTTPException(403,'Интеграция не настроена')
+    return create_bot_submission(payload)
+
+
+def create_bot_submission(payload: BotIn):
     if (payload.latitude is None)!=(payload.longitude is None):raise HTTPException(422,'Координаты передаются парой')
     with db() as con:
-        lat,lon=payload.latitude or 55.7519,payload.longitude or 37.6176
+        con.execute('BEGIN IMMEDIATE')
+        if payload.provider == 'telegram' and payload.message_id is not None and payload.chat_id is not None:
+            previous = con.execute('SELECT * FROM telegram_messages WHERE chat_id=? AND message_id=?', (payload.chat_id, payload.message_id)).fetchone()
+            if previous:
+                return {'ok': True, 'event_id': previous['event_id'], 'submission_id': previous['submission_id'], 'status': 'review'}
+        lat=payload.latitude if payload.latitude is not None else 55.7519
+        lon=payload.longitude if payload.longitude is not None else 37.6176
         title=trim(payload.text.split('.')[0],115)
         cur=con.execute("INSERT INTO events(title,summary,topic,latitude,longitude,status,verification,created_at,updated_at) VALUES(?,?,?,?,?,'review','unverified',?,?)",
                 (title,trim(payload.text,900),'Город',lat,lon,now(),now()))
@@ -783,6 +841,8 @@ def ingest_bot(payload: BotIn, x_ingest_key: Annotated[str|None,Header(alias='X-
         sent=con.execute('INSERT INTO submissions(event_id,provider,provider_user_id,kind,text,latitude,longitude,submitted_at) VALUES(?,?,?,\'tip\',?,?,?,?)',
                 (eid,payload.provider,trim(payload.provider_user_id,120),trim(payload.text,3000),payload.latitude,payload.longitude,now()))
         sid=sent.lastrowid
+        if payload.provider == 'telegram' and payload.message_id is not None and payload.chat_id is not None:
+            con.execute('INSERT INTO telegram_messages(chat_id,message_id,event_id,submission_id) VALUES(?,?,?,?)', (payload.chat_id, payload.message_id, eid, sid))
     return {'ok':True,'event_id':eid,'submission_id':sid,'status':'review'}
 
 
@@ -883,7 +943,9 @@ async def revalidate_pages(request: Request, call_next):
 
 @app.get('/health')
 def health():
-    return {'ok':True,'demo_mode':DEMO_MODE}
+    return {'ok':True,'version':app.version,'demo_mode':DEMO_MODE,
+            'worker_enabled':os.getenv('NEWS_WORKER_ENABLED','1')=='1',
+            'telegram_configured':bool(os.getenv('TELEGRAM_BOT_TOKEN'))}
 
 
 @app.get('/')
@@ -895,5 +957,11 @@ def index():
 def editor_page():
     return FileResponse(STATIC/'editor.html')
 
+
+from app.newsroom import Newsroom
+
+newsroom = Newsroom(db, auth, editor, make_session, user_view)
+newsroom.init()
+app.include_router(newsroom.router)
 
 app.mount('/static',StaticFiles(directory=str(STATIC)),name='static')
