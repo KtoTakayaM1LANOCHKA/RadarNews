@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>NewsRadar — редакция</title>
+<link rel="stylesheet" href="/static/ui.css"><script src="/static/ui.js"></script></head>
+<body>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<section id="login" class="auth hidden">
+  <div class="card auth-card pop">
+    <div id="loginRadar"></div>
+    <h1>Вход в редакцию</h1>
+    <p class="muted">Проверка новостей, задач и источников.</p>
+    <form id="loginForm"><div class="field"><label for="password">Пароль редактора</label><input id="password" type="password" required autocomplete="current-password"></div><button class="btn primary full">Войти →</button></form>
+    <p style="margin:14px 0 10px"><a href="/">← В приложение</a></p>
+    <span class="theme-slot"></span>
+  </div>
+</section>
+
+<div id="workspace" class="hidden">
+  <aside id="side" class="side" aria-label="Меню редактора">
+    <div class="row between"><a class="brand" href="#overview"><span id="logoRadar"></span><b>NewsRadar</b></a><button id="sideClose" class="x" aria-label="Скрыть меню" title="Скрыть меню">✕</button></div>
+    <nav id="menu">
+      <a class="nav-item" href="#overview" data-view="overview"><i>⌂</i>Обзор</a>
+      <a class="nav-item" href="#events" data-view="events"><i>◉</i>Новости</a>
+      <a class="nav-item" href="#orders" data-view="orders"><i>▤</i>Задачи для проверки пользователей</a>
+      <a class="nav-item" href="#verification" data-view="verification"><i>◇</i>Подтверждение</a>
+      <a class="nav-item" href="#sources" data-view="sources"><i>▣</i>Источники</a>
+      <a class="nav-item" href="#map" data-view="map"><i>⌖</i>Карта</a>
+      <a class="nav-item" href="#analytics" data-view="analytics"><i>▥</i>Аналитика</a>
+      <a class="nav-item" href="#users" data-view="users"><i>♙</i>Пользователи</a>
+    </nav>
+    <div id="promo" class="promo"><button class="x" data-dismiss aria-label="Скрыть блок" title="Скрыть">✕</button><div id="promoRadar"></div><strong>Новости в реальном времени</strong><p>События, подтверждения и опровержения в одной панели.</p><a class="btn" href="#events">Открыть очередь →</a></div>
+    <div class="side-bottom"><a class="nav-item" href="/"><i>↗</i>Приложение</a><button id="logout" class="nav-item"><i>⇥</i>Выйти</button></div>
+  </aside>
+  <div id="sideScrim" class="side-scrim"></div>
+
+  <div class="main">
+    <header class="top">
+      <button id="menuBtn" class="icon-btn" aria-label="Меню" title="Показать или скрыть меню">☰</button>
+      <div class="grow"><h1 id="viewTitle"></h1><p id="viewSub" class="muted tiny"></p></div>
+      <label class="search">⌕ <input id="search" type="search" placeholder="Поиск по новостям и задачам" aria-label="Поиск"></label>
+      <button id="refreshBtn" class="icon-btn" title="Обновить" aria-label="Обновить">↻</button>
+      <span class="theme-slot"></span>
+    </header>
+
+    <section id="view-overview" class="view hidden stack">
+      <div id="ovMetrics" class="metrics"></div>
+      <div class="grid2">
+        <div class="card"><div class="row between wrap"><h2>Активность новостей</h2><span id="periods" class="seg" role="group" aria-label="Период"><button data-period="day">День</button><button data-period="week">Неделя</button><button data-period="month" class="on">Месяц</button><button data-period="year">Год</button></span></div><div id="ovChart" class="bars"></div></div>
+        <div class="card"><div class="row between"><h2>Очередь</h2><a class="btn ghost" href="#events">Все →</a></div><div id="ovQueue"></div></div>
+        <div class="card"><div class="row between"><h2>Карта событий</h2><a class="btn ghost" href="#map">Открыть →</a></div><div id="miniMap" class="map small" style="margin-top:8px"></div></div>
+        <div class="card"><div class="row between"><h2>Прогресс проверки</h2><a class="btn ghost" href="#verification">Ответы →</a></div><div id="ovProgress" class="row" style="gap:18px;margin-top:10px"></div></div>
+      </div>
+      <div class="card"><h2>Последние новости</h2><div class="table-scroll"><table><thead><tr><th>Событие</th><th>Тематика</th><th>Статус</th><th>Значимость</th><th>Эксклюзив</th><th></th></tr></thead><tbody id="ovRows"></tbody></table></div></div>
+    </section>
+
+    <section id="view-events" class="view hidden"><p class="muted">Нажмите на новость, чтобы открыть её на весь экран.</p><div id="eventCards" class="cards"></div></section>
+
+    <section id="view-event" class="view hidden">
+      <div class="page-head"><button class="icon-btn" data-back="#events" aria-label="Назад к новостям" title="Назад к новостям">←</button><span class="muted">Назад к новостям</span></div>
+      <div id="eventBody" class="detail"></div>
+    </section>
+
+    <section id="view-orders" class="view hidden"><p class="muted">Открытые задачи: пользователи рядом присылают подтверждения и опровержения.</p><div id="orderCards" class="cards"></div></section>
+
+    <section id="view-verification" class="view hidden"><p class="muted">Принятые ответы приносят пользователю баллы, отклонённые — снимают.</p><div id="subList"></div></section>
+
+    <section id="view-sources" class="view hidden"><div class="card"><form id="searchForm" class="row wrap"><input id="searchQuery" class="grow" style="flex:1 1 220px" placeholder="Например: событие + город + время" required><button class="btn primary">Искать источники</button></form><div id="searchResults" style="margin-top:12px"></div><p class="muted tiny" style="margin:10px 0 0">Поиск через Brave Search работает при наличии API-ключа. Результаты не являются подтверждением.</p></div></section>
+
+    <section id="view-map" class="view hidden">
+      <div class="page-head"><p id="emapStatus" class="muted grow" style="margin:0">Нажмите на значок, чтобы открыть событие</p><button id="emapLoc" class="btn ghost">⌖ Где я</button><button id="emapFit" class="btn ghost">⤢ Все события</button></div>
+      <div id="emapTypes" class="chips" role="group" aria-label="Фильтр по статусу"></div>
+      <div id="emapTopics" class="chips" role="group" aria-label="Фильтр по тематике"></div>
+      <div class="map-wrap"><div id="emap" class="map"></div><div id="emapCard" class="map-card hidden"></div></div>
+      <p id="emapCount" class="muted tiny" style="margin-top:8px"></p>
+    </section>
+
+    <section id="view-analytics" class="view hidden stack"><div id="anMetrics" class="metrics"></div><div class="card"><h2>Распределение по статусам</h2><div id="anBars"></div></div></section>
+
+    <section id="view-users" class="view hidden stack"><div id="usMetrics" class="metrics"></div><div class="card"><h2>Репутация пользователей</h2><div class="table-scroll"><table><thead><tr><th>Ник</th><th>Баллы</th><th>Кошелёк</th><th>Сообщений</th></tr></thead><tbody id="usRows"></tbody></table></div></div></section>
+
+    <p class="muted tiny" style="margin-top:24px">NewsRadar MVP · анализ помогает редактору, но не заменяет проверку фактов человеком.</p>
+  </div>
+</div>
+<script src="/static/editor.js" defer></script>
+</body></html>

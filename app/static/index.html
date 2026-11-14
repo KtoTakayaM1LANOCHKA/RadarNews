@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>NewsRadar — события рядом</title>
+<link rel="stylesheet" href="/static/ui.css"><script src="/static/ui.js"></script></head>
+<body class="is-app">
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<!-- Вход: показывается сразу, пока пользователь не авторизован -->
+<section id="auth" class="auth hidden">
+  <div class="card auth-card pop">
+    <div id="authRadar"></div>
+    <h1>NewsRadar</h1>
+    <p class="muted">Присылайте новости, подтверждайте события рядом и получайте баллы.</p>
+    <form id="phoneForm">
+      <div class="field"><label for="authPhone">Телефон — вход или регистрация</label><input id="authPhone" type="tel" autocomplete="tel" placeholder="+79991234567" required></div>
+      <button class="btn primary full">Получить код →</button>
+    </form>
+    <form id="codeForm" class="hidden">
+      <div class="field"><label for="authCode">Код из сообщения</label><input id="authCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6" required></div>
+      <p id="codeHint" class="muted tiny"></p>
+      <div class="row"><button type="button" id="codeBack" class="btn ghost">← Номер</button><button class="btn primary grow">Войти</button></div>
+    </form>
+    <p class="muted tiny" style="margin:14px 0 8px">Приложение запомнит вас на этом устройстве.</p>
+    <span class="theme-slot"></span>
+  </div>
+</section>
+
+<div id="app" class="app hidden">
+  <header class="top">
+    <a class="brand" href="#map" aria-label="NewsRadar — на карту"><span id="logoRadar"></span><b>NewsRadar</b></a>
+    <span class="grow"></span>
+    <span class="theme-slot"></span>
+    <button id="profileBtn" class="avatar" aria-label="Личный кабинет" title="Личный кабинет"></button>
+  </header>
+  <main>
+    <section id="page-map" class="page hidden">
+      <div class="page-head">
+        <div class="grow"><h1>События на карте</h1><p id="mapStatus" class="muted tiny" role="status" style="margin:2px 0 0">Загрузка карты…</p></div>
+        <button id="locBtn" class="btn ghost" title="Показать моё местоположение">⌖ <span class="sm-hide">Где я</span></button>
+        <button id="demoBtn" class="btn ghost" title="Вернуться к демо-событиям в Москве">↺ <span class="sm-hide">Москва</span></button>
+        <select id="radius" aria-label="Радиус поиска" style="width:auto"><option value="2">2 км</option><option value="5">5 км</option><option value="10" selected>10 км</option><option value="25">25 км</option><option value="50">50 км</option><option value="200">200 км</option></select>
+      </div>
+      <div id="typeChips" class="chips" role="group" aria-label="Фильтр по типу событий"></div>
+      <div id="topicChips" class="chips" role="group" aria-label="Фильтр по тематике"></div>
+      <div class="map-wrap"><div id="map" class="map" role="region" aria-label="Карта событий"></div><div id="mapCard" class="map-card hidden"></div></div>
+      <p id="mapCount" class="muted tiny" style="margin-top:8px"></p>
+      <div id="mapList"></div>
+      <div id="geoNote" class="notice">Карта спрашивает местоположение, чтобы показать события рядом. Координаты никуда не отправляются без вашего согласия.<button class="x" data-dismiss aria-label="Скрыть">✕</button></div>
+    </section>
+
+    <section id="page-feed" class="page hidden">
+      <div class="page-head"><div class="grow"><h1>Задачи на подтверждение</h1><p class="muted tiny" style="margin:2px 0 0">Редакция просит подтвердить или опровергнуть события рядом</p></div><button id="feedRefresh" class="icon-btn" title="Обновить" aria-label="Обновить">↻</button></div>
+      <div id="feedList"></div>
+    </section>
+
+    <section id="page-send" class="page hidden">
+      <div class="page-head"><h1>Прислать новость</h1></div>
+      <div class="grid2">
+        <form id="tipForm" class="card">
+          <div class="field"><label for="tipTitle">Заголовок</label><input id="tipTitle" maxlength="140" required placeholder="Что произошло?"></div>
+          <div class="field"><label for="tipText">Описание</label><textarea id="tipText" minlength="8" maxlength="3000" required placeholder="Факты, время и источник информации"></textarea></div>
+          <div class="field"><label for="tipTopic">Тематика</label><select id="tipTopic"><option>Город</option><option>Транспорт</option><option>Культура</option><option>Афиша</option><option>Технологии</option><option>Спорт</option><option>Досуг</option></select></div>
+          <div class="field"><label for="tipFiles">Фото или видео (до 5 файлов по 12 МБ)</label><input type="file" id="tipFiles" accept="image/jpeg,image/png,image/webp,video/mp4,video/webm" multiple></div>
+          <label class="check"><input id="tipGeo" type="checkbox"> Приложить моё местоположение</label>
+          <label class="check"><input id="tipContact" type="checkbox"> Редактор может связаться со мной по номеру</label>
+          <button class="btn primary full">Отправить в редакцию →</button>
+        </form>
+        <aside class="stack" style="align-content:start">
+          <div class="card radar-card"><div id="sendRadar"></div><h2>Радар ловит события</h2><p>Каждая отметка — сообщение очевидца. Ваша новость попадёт к редактору, а не сразу на карту.</p></div>
+          <div class="card"><h2>Что дальше</h2><ol class="steps"><li>Редактор проверяет сообщение.</li><li>При необходимости создаёт задачу на подтверждение для пользователей рядом.</li><li>За достоверную новость начисляются баллы и вознаграждение — на следующий день.</li></ol>
+            <div class="notice warn" style="margin-top:12px">Не рискуйте ради новости и не публикуйте чужие личные данные.</div></div>
+        </aside>
+      </div>
+    </section>
+
+    <section id="page-profile" class="page hidden">
+      <div class="page-head"><button class="icon-btn" data-back="#map" aria-label="Назад">←</button><h1>Личный кабинет</h1></div>
+      <div id="profileBody" class="stack"></div>
+    </section>
+  </main>
+</div>
+
+<nav id="tabbar" class="tabbar hidden" aria-label="Основные разделы">
+  <button data-tab="map"><span>◉</span>Карта</button>
+  <button data-tab="send" class="send"><span>＋</span>Прислать новость</button>
+  <button data-tab="feed"><span>≡</span>Лента</button>
+</nav>
+
+<div id="modal" class="scrim hidden" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+  <div class="sheet pop"><div class="row between" style="margin-bottom:10px"><h2 id="modalTitle" style="margin:0"></h2><button class="x" id="modalClose" aria-label="Закрыть">✕</button></div><div id="modalBody"></div></div>
+</div>
+<script src="/static/app.js" defer></script>
+</body></html>
