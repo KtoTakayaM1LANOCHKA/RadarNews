@@ -94,6 +94,7 @@ function loadLeaflet() {
 async function createMap(el, center = MOSCOW, zoom = 12) {
   await loadLeaflet();
   const map = L.map(el, {center: [center.lat, center.lon], zoom});
+  map.attributionControl.setPrefix('<a href="https://leafletjs.com" target="_blank" rel="noopener">Leaflet</a>');
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>'}).addTo(map);
   map.pins = L.layerGroup().addTo(map);
   return map;
