@@ -199,6 +199,8 @@ async function renderProfile() {
         <p class="muted tiny" style="margin:8px 0 0">${esc(u.phone)} ${u.role === 'admin' ? '<span class="tag order">Админ</span>' : ''}</p>
       </div>
     </div>
+    <div class="card row between wrap"><div class="row wrap"><b>Тема</b>${themeSeg(true)}</div>
+      <div class="row wrap">${u.role === 'admin' ? '<a class="btn ghost" href="/editor">Редакция ↗</a>' : ''}<button id="logoutBtn" class="btn ghost">⇥ Выйти</button></div></div>
     <div class="grid2">
       <div class="card center"><h2>Репутация</h2>${gauge(u.credits)}
         <p style="margin:4px 0"><b>${signed(u.credits)} баллов</b> · ${repLevel(u.credits)}</p>
@@ -218,9 +220,7 @@ async function renderProfile() {
     <div class="card"><h2>Мои сообщения</h2>${d.items.map(s => `<div class="story" style="box-shadow:none">
         <div class="row between wrap"><span class="tag ${esc(s.status)}">${LABELS.sub[s.status] || esc(s.status)}</span><span class="muted tiny">${LABELS.kind[s.kind] || esc(s.kind)} · ${esc(s.submitted_at.slice(0, 10))}</span></div>
         <h3>${esc(s.title)}</h3><p>${esc(s.text)}</p>
-        ${s.points || s.money ? `<span class="pill">${signed(s.points)} баллов${s.money ? ` · +${s.money} ₽` : ''}${s.reward_pending ? ' · придёт завтра' : ''}</span>` : ''}</div>`).join('') || '<div class="empty">Пока нет сообщений. Нажмите «＋ Прислать новость».</div>'}</div>
-    <div class="card row between wrap"><div class="row wrap"><b>Тема</b>${themeSeg(true)}</div>
-      <div class="row wrap">${u.role === 'admin' ? '<a class="btn ghost" href="/editor">Редакция ↗</a>' : ''}<button id="logoutBtn" class="btn ghost">⇥ Выйти</button></div></div>`;
+        ${s.points || s.money ? `<span class="pill">${signed(s.points)} баллов${s.money ? ` · +${s.money} ₽` : ''}${s.reward_pending ? ' · придёт завтра' : ''}</span>` : ''}</div>`).join('') || '<div class="empty">Пока нет сообщений. Нажмите «＋ Прислать новость».</div>'}</div>`;
   applyTheme();
   requestAnimationFrame(() => $('needle').style.transform = `rotate(${Math.max(-1, Math.min(1, u.credits / GAUGE_MAX)) * 90}deg)`);
   $('nickForm').onsubmit = async e => {

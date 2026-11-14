@@ -2,13 +2,13 @@
    Тема задаётся атрибутом data-theme="light|dark" на <html> (ставит ui.js; по умолчанию — как в системе). */
 :root{
   --bg:#eef5fd;--panel:#fff;--panel2:#e6f0fc;--line:#cfe0f5;--text:#0e2240;--muted:#5a7190;
-  --accent:#076cfc;--on-accent:#fff;--soft:#d6e8fe;--warm:#fdbc02;
+  --accent:#076cfc;--on-accent:#fff;--soft:#d6e8fe;--warm:#ff7a45;
   --green:#0b8f63;--green-soft:#d5f6e6;--red:#d92a3d;--red-soft:#fde3e6;
   --violet:#6d4bd1;--violet-soft:#e9e2fb;--amber:#8a5a00;--amber-soft:#fff1cc;
   --shadow:0 6px 22px #0a3a8a17;--r:18px;--ease:cubic-bezier(.22,.8,.3,1);color-scheme:light}
 :root[data-theme=dark]{
   --bg:#061226;--panel:#0d1f3c;--panel2:#13294e;--line:#23406e;--text:#eaf2ff;--muted:#93aacb;
-  --accent:#4b9af9;--on-accent:#04122a;--soft:#143260;--warm:#fdc50b;
+  --accent:#4b9af9;--on-accent:#04122a;--soft:#143260;--warm:#ff8f61;
   --green:#3ddc97;--green-soft:#0f3b30;--red:#ff7482;--red-soft:#47202a;
   --violet:#b19bff;--violet-soft:#2b2458;--amber:#fdc50b;--amber-soft:#40330c;
   --shadow:0 10px 30px #0008;color-scheme:dark}
@@ -96,7 +96,7 @@ tr[data-open]:hover{background:var(--panel2)}
 .avatar.xl{width:88px;height:88px;font-size:32px;position:relative;overflow:visible;cursor:pointer}
 .avatar.xl img{border-radius:50%}
 .avatar.xl .edit{position:absolute;right:-4px;bottom:-4px;width:30px;height:30px;border-radius:50%;background:var(--panel);color:var(--text);border:1px solid var(--line);display:grid;place-items:center;font-size:14px}
-.auth{min-height:100vh;min-height:100dvh;display:grid;place-items:center;padding:16px;background:radial-gradient(circle at 50% 0,var(--soft),var(--bg) 62%)}
+.auth{position:fixed;inset:0;z-index:1000;overflow:auto;display:grid;place-items:center;padding:16px;background:radial-gradient(circle at 50% 0,var(--soft),var(--bg) 62%)}
 .auth-card{width:min(430px,100%);text-align:center;padding:26px 22px}
 .auth-card .radar{width:150px;margin:0 auto 16px}
 .auth-card form{text-align:left;margin-top:16px}
