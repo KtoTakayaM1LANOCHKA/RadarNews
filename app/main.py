@@ -593,7 +593,7 @@ def store_media_data(submission_id:int,data:bytes,content:str,original_name:str)
 @app.get('/api/media/{media_id}')
 def download_media(media_id:int, session=Depends(auth)):
     with db() as con:
-        row=con.execute('''SELECT m.*,s.user_id FROM media m JOIN submissions s ON s.id=m.submission_id WHERE m.id=? AND s.status!='deleted'''',(media_id,)).fetchone()
+        row=con.execute("SELECT m.*,s.user_id FROM media m JOIN submissions s ON s.id=m.submission_id WHERE m.id=? AND s.status!='deleted'",(media_id,)).fetchone()
         if not row:raise HTTPException(404,'Медиа не найдено')
         if session['role'] not in ('editor','admin') and session['user_id']!=row['user_id']:
             raise HTTPException(403,'Нет доступа к медиа')
