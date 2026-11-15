@@ -1,8 +1,11 @@
 <!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>NewsRadar — редакция</title>
-<link rel="stylesheet" href="/static/ui.css"><script src="/static/ui.js"></script></head>
+<link rel="stylesheet" href="/static/ui.css?v=0.2.1"><script src="/static/ui.js?v=0.2.1" defer></script></head>
 <body>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
+<section id="boot" class="auth" aria-label="Загрузка приложения">
+  <div class="card auth-card center"><h1>NewsRadar</h1><p id="bootMessage" role="status" aria-live="polite">Открываем приложение…</p><button id="bootRetry" class="btn primary hidden">Повторить попытку</button></div>
+</section>
 
 <section id="login" class="auth hidden">
   <div class="card auth-card pop">
@@ -64,7 +67,17 @@
 
     <section id="view-verification" class="view hidden"><p class="muted">Принятые ответы приносят пользователю баллы, отклонённые — снимают.</p><div id="subList"></div></section>
 
-    <section id="view-sources" class="view hidden"><div class="card"><form id="searchForm" class="row wrap"><input id="searchQuery" class="grow" style="flex:1 1 220px" placeholder="Например: событие + город + время" required><button class="btn primary">Искать источники</button></form><div id="searchResults" style="margin-top:12px"></div><p class="muted tiny" style="margin:10px 0 0">Поиск через Brave Search работает при наличии API-ключа. Результаты не являются подтверждением.</p></div></section>
+    <section id="view-sources" class="view hidden stack">
+      <div class="card"><h2>Поиск новостей в интернете</h2><form id="searchForm" class="row wrap"><input id="searchQuery" class="grow" style="flex:1 1 220px" placeholder="Например: событие + город + время" required minlength="3" maxlength="180"><button class="btn primary">Найти новости</button></form><div id="searchResults" style="margin-top:12px"></div><p class="muted tiny">Без ключа используется Google News RSS, с ключом — Brave Search. Новость можно отправить в очередь для проверки.</p></div>
+      <div class="card"><div class="row between wrap"><h2>Автоматический сбор</h2><button id="collectSources" class="btn primary">Проверить сейчас</button></div><p class="muted">Поисковые запросы и RSS-ленты хранятся в базе. Новые материалы попадают в редакцию и отправляются подписанным редакторам в Telegram.</p><div id="sourceList"></div></div>
+      <form id="sourceForm" class="card stack"><h2 id="sourceFormTitle">Добавить источник</h2><input id="sourceId" type="hidden">
+        <div class="grid2"><div class="field"><label for="sourceName">Название</label><input id="sourceName" required minlength="2" maxlength="100"></div><div class="field"><label for="sourceKind">Тип</label><select id="sourceKind"><option value="search">Поиск в интернете</option><option value="rss">RSS / Atom</option></select></div></div>
+        <div class="field"><label for="sourceQuery">Поисковый запрос</label><input id="sourceQuery" maxlength="180" placeholder="Например: новости транспорта Казани"></div>
+        <div class="field"><label for="sourceUrl">URL RSS / Atom (для типа RSS)</label><input id="sourceUrl" type="url" maxlength="900" placeholder="https://example.org/rss"></div>
+        <div class="grid2"><div class="field"><label for="sourceTopic">Тематика</label><input id="sourceTopic" value="Город" required maxlength="60"></div><div class="field"><label for="sourceInterval">Интервал, минут</label><input id="sourceInterval" type="number" min="5" max="1440" value="15" required></div></div>
+        <label class="check"><input id="sourceEnabled" type="checkbox" checked> Собирать автоматически</label><div class="row wrap"><button class="btn primary">Сохранить источник</button><button id="sourceCancel" type="button" class="btn ghost">Сбросить</button></div>
+      </form>
+    </section>
 
     <section id="view-map" class="view hidden">
       <div class="page-head"><p id="emapStatus" class="muted grow" style="margin:0">Нажмите на значок, чтобы открыть событие</p><button id="emapLoc" class="btn ghost">⌖ Где я</button><button id="emapFit" class="btn ghost">⤢ Все события</button></div>
@@ -81,5 +94,5 @@
     <p class="muted tiny" style="margin-top:24px">NewsRadar MVP · анализ помогает редактору, но не заменяет проверку фактов человеком.</p>
   </div>
 </div>
-<script src="/static/editor.js" defer></script>
+<script src="/static/editor.js?v=0.2.1" defer></script>
 </body></html>

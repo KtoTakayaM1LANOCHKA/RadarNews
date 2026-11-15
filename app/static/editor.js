@@ -18,22 +18,31 @@ const matches = e => !query || `${e.title} ${e.summary} ${e.topic} ${e.status_la
 const metric = (label, note, value, feature) => `<div class="metric ${feature ? 'feature' : ''}"><span>${label}</span><b>${value}</b><span>${note}</span></div>`;
 const count = status => data.events.filter(e => e.status === status).length;
 const ensureMap = (id, zoom) => maps[id] ||= createMap($(id), MOSCOW, zoom);
-const fitAll = (map, list) => list.length && map.fitBounds(L.latLngBounds(list.map(e => [e.latitude, e.longitude])).pad(.25), {maxZoom: 14});
+const fitAll = (map, list) => { const located = list.filter(e => e.location_known !== 0); if (located.length) map.fitBounds(L.latLngBounds(located.map(e => [e.latitude, e.longitude])).pad(.25), {maxZoom: 14}) };
 
 // ---------- Вход: пароль редактора или сессия администратора из приложения ----------
 async function start() {
   radar($('loginRadar'), 7); radar($('logoRadar'), 2); radar($('promoRadar'), 4);
-  rules = (await api('/api/config').catch(() => ({}))).rewards;
-  for (const candidate of [store.get('nr_editor_token'), store.get('nr_user_session')]) {
+  showBoot();
+  api('/api/config', {timeoutMs: 10000}).then(d => { rules = d.rewards; if ($('imp')) rewardHint() }).catch(err => toast(err.message, true));
+  let telegram;
+  try { telegram = await telegramSession() } catch (err) { showBoot(err.message, true); return }
+  if (telegram) {
+    store.set('nr_user_session', telegram.token);
+    if (['editor', 'admin'].includes(telegram.user.role)) { token = telegram.token; viaApp = true; return enter() }
+    token = ''; hideBoot(); $('login').classList.remove('hidden'); return;
+  }
+  for (const candidate of new Set([store.get('nr_editor_token'), store.get('nr_user_session')])) {
     if (!candidate) continue;
     token = candidate;
     try {
-      if (['editor', 'admin'].includes((await api('/api/auth/me')).role)) { viaApp = candidate !== store.get('nr_editor_token'); return enter() }
-    } catch {}
+      if (['editor', 'admin'].includes((await api('/api/auth/me', {timeoutMs: 10000})).role)) { viaApp = candidate !== store.get('nr_editor_token'); return enter() }
+    } catch (err) { if (err.status !== 401 && err.status !== 403) { showBoot(err.message, true); return } }
   }
-  token = ''; $('login').classList.remove('hidden');
+  token = ''; hideBoot(); $('login').classList.remove('hidden');
 }
 function enter() {
+  hideBoot();
   $('login').classList.add('hidden'); $('workspace').classList.remove('hidden');
   document.body.classList.toggle('nav-open', wide() && store.get('nr_nav') !== '0');
   route(); refresh();
@@ -72,7 +81,7 @@ async function refresh() {
   catch (err) { toast(err.message, true); if (err.status === 401 || err.status === 403) logout() }
 }
 function render() {
-  if (data) ({overview: renderOverview, events: renderEvents, event: renderEvent, orders: renderOrders, verification: renderSubs, map: renderMap, analytics: renderAnalytics, users: renderUsers}[view] || (() => {}))();
+  if (data) ({overview: renderOverview, events: renderEvents, event: renderEvent, orders: renderOrders, verification: renderSubs, map: renderMap, analytics: renderAnalytics, users: renderUsers, sources: renderSources}[view] || (() => {}))();
 }
 $('refreshBtn').onclick = () => refresh().then(() => toast('Данные обновлены'));
 $('search').oninput = e => { query = e.target.value.trim().toLocaleLowerCase('ru'); render() };
@@ -105,6 +114,7 @@ function renderEvents() {
     || '<div class="empty">Новостей не найдено</div>';
 }
 function rewardHint() {
+  if (!rules) { $('rewardHint').textContent = 'Загружаем тарифы вознаграждений…'; return }
   const points = 10 + Math.floor((45 * (+$('imp').value + +$('exc').value) + 50) / 100), tier = rules.tiers.find(t => points >= t.from);
   $('impValue').textContent = $('imp').value; $('excValue').textContent = $('exc').value;
   $('rewardHint').textContent = `Автору за достоверную новость: +${points} баллов и ${tier.money} ₽ (тип «${tier.name}»). За недостоверную: ${rules.false_news} баллов без денег. Начисление — на следующий день.`;
@@ -131,6 +141,7 @@ function renderEvent() {
       <div class="grid2"><div class="field"><label for="imp">Значимость: <b id="impValue"></b>/100</label><input id="imp" type="range" min="0" max="100" value="${e.importance}"></div>
         <div class="field"><label for="exc">Эксклюзивность: <b id="excValue"></b>/100</label><input id="exc" type="range" min="0" max="100" value="${e.exclusive_score}"></div></div>
       <p id="rewardHint" class="muted tiny"></p>
+      ${e.location_known === 0 ? '<p class="notice">Место новости из интернета не установлено. Для показа на карте укажите проверенные координаты.</p><div class="grid2"><div class="field"><label for="eventLat">Широта</label><input id="eventLat" type="number" min="-90" max="90" step="any"></div><div class="field"><label for="eventLon">Долгота</label><input id="eventLon" type="number" min="-180" max="180" step="any"></div></div>' : ''}
       <div class="field"><label for="note">Комментарий редактора</label><textarea id="note" placeholder="Причина решения. Для публикации неподтверждённой новости после независимой проверки укажите «проверено редактором»."></textarea></div>
       <div class="field"><label for="question">Что должны подтвердить пользователи? (для задачи)</label><textarea id="question" placeholder="Например: нужна ссылка на официальное расписание или документ"></textarea></div>
       <div class="row wrap"><button class="btn green" data-decide="publish">✓ Опубликовать</button>
@@ -155,7 +166,8 @@ async function decide(action) {
   const buttons = [...document.querySelectorAll('[data-decide]')], wasDisabled = buttons.map(b => b.disabled);
   buttons.forEach(b => b.disabled = true);
   try {
-    await api(`/api/editor/events/${current}/decision`, {method: 'POST', body: JSON.stringify({action, note: $('note').value, question: $('question').value, importance: +$('imp').value, exclusive_score: +$('exc').value})});
+    const coordinates = $('eventLat') && ($('eventLat').value || $('eventLon').value) ? {latitude: $('eventLat').value === '' ? null : +$('eventLat').value, longitude: $('eventLon').value === '' ? null : +$('eventLon').value} : {};
+    await api(`/api/editor/events/${current}/decision`, {method: 'POST', body: JSON.stringify({action, note: $('note').value, question: $('question').value, importance: +$('imp').value, exclusive_score: +$('exc').value, ...coordinates})});
     toast({reject: 'Новость отклонена', publish: 'Новость опубликована', revise: 'Задача для пользователей создана'}[action]);
     await refresh();
   } catch (err) { toast(err.message, true); buttons.forEach((b, i) => b.disabled = wasDisabled[i]) }
@@ -232,8 +244,61 @@ $('searchForm').onsubmit = async e => {
   e.preventDefault();
   try {
     const d = await api('/api/discovery/search', {method: 'POST', body: JSON.stringify({query: $('searchQuery').value})});
-    $('searchResults').innerHTML = d.items.map(x => `<div class="story" style="box-shadow:none"><b>${esc(x.title)}</b><p>${esc(x.description)}</p><a target="_blank" rel="noopener noreferrer" href="${esc(/^https?:\/\//i.test(x.url) ? x.url : '#')}">Открыть источник ↗</a></div>`).join('') || '<div class="empty">Ничего не найдено</div>';
+    searchHits = d.items;
+    $('searchResults').innerHTML = d.items.map((x, i) => `<div class="story" style="box-shadow:none"><b>${esc(x.title)}</b><p>${esc(x.description)}</p><div class="row wrap"><a target="_blank" rel="noopener noreferrer" href="${esc(/^https?:\/\//i.test(x.url) ? x.url : '#')}">Открыть источник ↗</a><button class="btn ghost" data-import-hit="${i}">В очередь редактора</button></div></div>`).join('') || '<div class="empty">Ничего не найдено</div>';
   } catch (err) { toast(err.message, true) }
 };
 
 start();
+
+let sources = [], searchHits = [];
+async function renderSources() {
+  try {
+    const d = await api('/api/editor/sources');
+    sources = d.items;
+    $('sourceList').innerHTML = (d.worker_enabled ? '' : '<p class="notice">Фоновый сбор отключён. Для отдельного воркера запустите python -m app.bots.telegram_bot.</p>') + sources.map(s => `<article class="story" style="box-shadow:none"><div class="row between wrap"><b>${esc(s.name)}</b><span class="tag">${s.enabled ? 'Включён' : 'Пауза'}</span></div><p style="overflow-wrap:anywhere">${esc(s.kind === 'search' ? s.query : s.url)}</p><p class="muted tiny">Каждые ${s.interval_minutes} мин · импортировано: ${s.imported_count} · проверка: ${s.last_checked ? when(s.last_checked) : 'ещё не было'}</p>${s.last_error ? `<p class="notice warn">${esc(s.last_error)}</p>` : ''}<div class="row wrap"><button class="btn ghost" data-edit-source="${s.id}">Изменить</button><button class="btn ghost" data-toggle-source="${s.id}">${s.enabled ? 'Приостановить' : 'Включить'}</button></div></article>`).join('');
+  } catch (err) { toast(err.message, true) }
+}
+function sourcePayload(s) {
+  return {name: s.name, kind: s.kind, query: s.query, url: s.url, topic: s.topic, latitude: s.latitude, longitude: s.longitude, interval_minutes: s.interval_minutes, enabled: !!s.enabled};
+}
+$('sourceForm').onsubmit = async e => {
+  e.preventDefault();
+  const id = $('sourceId').value, previous = sources.find(s => s.id === +id);
+  const payload = {...(previous ? sourcePayload(previous) : {}), name: $('sourceName').value, kind: $('sourceKind').value, query: $('sourceQuery').value, url: $('sourceUrl').value, topic: $('sourceTopic').value, interval_minutes: +$('sourceInterval').value, enabled: $('sourceEnabled').checked};
+  try {
+    await api('/api/editor/sources' + (id ? '/' + id : ''), {method: id ? 'PUT' : 'POST', body: JSON.stringify(payload)});
+    $('sourceForm').reset(); $('sourceId').value = ''; $('sourceFormTitle').textContent = 'Добавить источник';
+    toast('Источник сохранён'); renderSources();
+  } catch (err) { toast(err.message, true) }
+};
+$('sourceCancel').onclick = () => { $('sourceForm').reset(); $('sourceId').value = ''; $('sourceFormTitle').textContent = 'Добавить источник' };
+$('collectSources').onclick = async () => {
+  $('collectSources').disabled = true;
+  try {
+    const d = await api('/api/editor/sources/collect', {method: 'POST'});
+    toast(d.busy ? 'Сбор уже выполняется' : `Добавлено: ${d.imported}${d.errors.length ? '. Ошибок источников: ' + d.errors.length : ''}`, !!d.errors.length);
+    await refresh();
+  } catch (err) { toast(err.message, true) }
+  finally { $('collectSources').disabled = false; renderSources() }
+};
+document.addEventListener('click', async e => {
+  const edit = e.target.closest('[data-edit-source]'), toggle = e.target.closest('[data-toggle-source]'), hit = e.target.closest('[data-import-hit]');
+  if (edit) {
+    const s = sources.find(s => s.id === +edit.dataset.editSource);
+    $('sourceId').value = s.id; $('sourceName').value = s.name; $('sourceKind').value = s.kind; $('sourceQuery').value = s.query; $('sourceUrl').value = s.url; $('sourceTopic').value = s.topic; $('sourceInterval').value = s.interval_minutes; $('sourceEnabled').checked = !!s.enabled;
+    $('sourceFormTitle').textContent = 'Изменить источник'; $('sourceForm').scrollIntoView({behavior: 'smooth'});
+  }
+  if (toggle) {
+    const s = sources.find(s => s.id === +toggle.dataset.toggleSource);
+    try { await api('/api/editor/sources/' + s.id, {method: 'PUT', body: JSON.stringify({...sourcePayload(s), enabled: !s.enabled})}); renderSources() } catch (err) { toast(err.message, true) }
+  }
+  if (hit) {
+    const x = searchHits[+hit.dataset.importHit];
+    hit.disabled = true;
+    try {
+      const d = await api('/api/discovery/import', {method: 'POST', body: JSON.stringify({title: x.title, summary: x.description.slice(0, 1200), source_url: x.url})});
+      toast(d.imported ? 'Новость добавлена в очередь' : 'Найден возможный дубль'); await refresh();
+    } catch (err) { toast(err.message, true); hit.disabled = false }
+  }
+});

@@ -9,26 +9,41 @@ const TABS = ['map', 'send', 'feed', 'profile'];
 const TYPES = [['event', '● Новости'], ['order', '? Нужно подтвердить'], ['ad', '★ Реклама']];
 const GAUGE_MAX = 300;   // баллов до края шкалы репутации
 const signed = n => (n > 0 ? '+' : '') + n;
+let rulesLoading;
+function loadRules() {
+  if (state.rules) return Promise.resolve(state.rules);
+  return rulesLoading ||= api('/api/config', {timeoutMs: 10000}).then(d => state.rules = d.rewards)
+    .catch(error => { rulesLoading = null; throw error });
+}
 
 // ---------- Вход и регистрация сразу при открытии ----------
 function setToken(token) { state.token = token; store.set('nr_user_session', token || null) }
 async function start() {
   radar($('authRadar'), 7); radar($('logoRadar'), 2); radar($('sendRadar'), 8);
-  state.rules = (await api('/api/config').catch(() => ({}))).rewards;
-  if (state.token) {
-    try { state.user = await api('/api/auth/me') } catch { setToken('') }
-  }
-  if (state.user && state.user.role !== 'editor') enter(); else showAuth();
+  showBoot(isTelegramLaunch() ? 'Входим через Telegram…' : 'Открываем NewsRadar…');
+  loadRules().catch(() => {}); // Settings must not delay the map or login.
+  try {
+    const session = await restoreSession(api, state.token);
+    if (session) { setToken(session.token); state.user = session.user }
+    else { setToken(''); state.user = null }
+  } catch (err) { showBoot(err.message, true); return }
+  if (state.user?.id) enter(); else showAuth();
 }
 function showAuth() {
+  hideBoot();
   state.user = null;
   $('app').classList.add('hidden'); $('tabbar').classList.add('hidden'); $('auth').classList.remove('hidden');
   $('codeForm').classList.add('hidden'); $('phoneForm').classList.remove('hidden');
 }
 function enter() {
+  hideBoot();
+  const editorEvent = new URLSearchParams(location.search).get('editor_event');
+  if (['editor', 'admin'].includes(state.user.role) && /^\d+$/.test(editorEvent || '')) {
+    location.replace('/editor#event/' + editorEvent); return;
+  }
   $('auth').classList.add('hidden'); $('app').classList.remove('hidden'); $('tabbar').classList.remove('hidden');
   paintAvatar(); route();
-  if (!state.started) { state.started = true; initMap().then(() => locate(true)) }
+  if (!state.started) { state.started = true; initMap(); if (!isTelegramLaunch()) locate(true) }
 }
 $('phoneForm').onsubmit = async e => {
   e.preventDefault();
@@ -77,6 +92,7 @@ addEventListener('keydown', e => { if (e.key === 'Escape') { closeModal(); choos
 async function initMap() {
   try {
     state.map = await createMap($('map'), state.center);
+    if (state.myLoc) showMe(state.map, state.myLoc);
     $('mapStatus').textContent = 'Нажмите на значок, чтобы открыть событие';
   } catch (err) {
     $('map').parentElement.classList.add('hidden');
@@ -188,7 +204,7 @@ function gauge(points) {   // стрелка: 0 — по центру, плюс 
 }
 async function renderProfile() {
   let d;
-  try { d = await api('/api/my/submissions') } catch (err) { if (err.status === 401) { setToken(''); return showAuth() } return toast(err.message, true) }
+  try { [d] = await Promise.all([api('/api/my/submissions'), loadRules()]) } catch (err) { if (err.status === 401) { setToken(''); return showAuth() } return toast(err.message, true) }
   const u = state.user = d.user, r = state.rules;
   paintAvatar();
   $('profileBody').innerHTML = `
@@ -199,8 +215,12 @@ async function renderProfile() {
         <p class="muted tiny" style="margin:8px 0 0">${esc(u.phone)} ${u.role === 'admin' ? '<span class="tag order">Админ</span>' : ''}</p>
       </div>
     </div>
-    <div class="card row between wrap"><div class="row wrap"><b>Тема</b>${themeSeg(true)}</div>
-      <div class="row wrap">${u.role === 'admin' ? '<a class="btn ghost" href="/editor">Редакция ↗</a>' : ''}<button id="logoutBtn" class="btn ghost">⇥ Выйти</button></div></div>
+    <section id="accessPanel" class="card stack" aria-labelledby="accessTitle"><h2 id="accessTitle">Панель доступа</h2>
+      <div class="row between wrap"><span>Ваша роль: <b>${({user: 'Пользователь', editor: 'Редактор', admin: 'Администратор'})[u.role]}</b></span>
+      ${['editor', 'admin'].includes(u.role) ? '<a class="btn primary" href="/editor">Открыть панель редактора ↗</a>' : '<button id="editorAccessBtn" class="btn ghost">Вход в редакцию</button>'}</div>
+      ${['editor', 'admin'].includes(u.role) ? '<div id="telegramSettings" class="stack"><p class="muted">Загрузка настроек Telegram…</p></div>' : '<p class="muted tiny">Доступ выдаёт администратор. Для демо доступен вход по паролю редакции.</p>'}
+      ${u.role === 'admin' ? '<details><summary>Управление редакторским доступом</summary><div id="accessUsers" class="stack"></div></details>' : ''}
+    </section>
     <div class="grid2">
       <div class="card center"><h2>Репутация</h2>${gauge(u.credits)}
         <p style="margin:4px 0"><b>${signed(u.credits)} баллов</b> · ${repLevel(u.credits)}</p>
@@ -220,8 +240,11 @@ async function renderProfile() {
     <div class="card"><h2>Мои сообщения</h2>${d.items.map(s => `<div class="story" style="box-shadow:none">
         <div class="row between wrap"><span class="tag ${esc(s.status)}">${LABELS.sub[s.status] || esc(s.status)}</span><span class="muted tiny">${LABELS.kind[s.kind] || esc(s.kind)} · ${esc(s.submitted_at.slice(0, 10))}</span></div>
         <h3>${esc(s.title)}</h3><p>${esc(s.text)}</p>
-        ${s.points || s.money ? `<span class="pill">${signed(s.points)} баллов${s.money ? ` · +${s.money} ₽` : ''}${s.reward_pending ? ' · придёт завтра' : ''}</span>` : ''}</div>`).join('') || '<div class="empty">Пока нет сообщений. Нажмите «＋ Прислать новость».</div>'}</div>`;
+        ${s.points || s.money ? `<span class="pill">${signed(s.points)} баллов${s.money ? ` · +${s.money} ₽` : ''}${s.reward_pending ? ' · придёт завтра' : ''}</span>` : ''}</div>`).join('') || '<div class="empty">Пока нет сообщений. Нажмите «＋ Прислать новость».</div>'}</div>
+    <div class="card row between wrap"><div class="row wrap"><b>Тема</b>${themeSeg(true)}</div>
+      <div class="row wrap"><button id="logoutBtn" class="btn ghost">⇥ Выйти</button></div></div>`;
   applyTheme();
+  setupAccessPanel(u);
   requestAnimationFrame(() => $('needle').style.transform = `rotate(${Math.max(-1, Math.min(1, u.credits / GAUGE_MAX)) * 90}deg)`);
   $('nickForm').onsubmit = async e => {
     e.preventDefault();
@@ -236,6 +259,47 @@ async function renderProfile() {
     try { toast((await api('/api/my/withdraw', {method: 'POST'})).message); renderProfile() } catch (err) { toast(err.message, true) }
   };
   $('logoutBtn').onclick = () => { setToken(''); showAuth(); toast('Вы вышли из аккаунта') };
+}
+
+async function setupAccessPanel(user) {
+  if ($('editorAccessBtn')) $('editorAccessBtn').onclick = () => {
+    openModal('Доступ в редакцию', '<form id="editorAccessForm" class="stack"><div class="field"><label for="editorPassword">Пароль редакции (демо)</label><input id="editorPassword" type="password" autocomplete="current-password" required></div><button class="btn primary">Войти</button></form>');
+    $('editorAccessForm').onsubmit = async e => {
+      e.preventDefault();
+      try {
+        const d = await api('/api/editor/login', {method: 'POST', body: JSON.stringify({password: $('editorPassword').value})});
+        setToken(d.token); closeModal(); renderProfile();
+      } catch (err) { toast(err.message, true) }
+    };
+  };
+  if (['editor', 'admin'].includes(user.role)) {
+    try {
+      const t = await api('/api/my/telegram');
+      if (!$('telegramSettings')) return;
+      $('telegramSettings').innerHTML = `<div class="row between wrap"><span>Telegram: ${t.linked ? (t.enabled ? 'уведомления включены' : 'рассылка отключена') : 'не привязан'}</span><div class="row wrap"><button id="telegramLink" class="btn ghost" ${t.configured ? '' : 'disabled'}>${t.linked ? 'Привязать заново' : 'Подключить уведомления'}</button>${t.linked ? '<button id="telegramUnlink" class="btn ghost">Отвязать</button>' : ''}</div></div><p class="muted tiny">${t.configured ? 'Код действует 10 минут. Отправьте его своему боту в личном чате. /stop отключает рассылку.' : 'Администратору нужно задать токен Telegram на сервере.'}</p>`;
+      $('telegramLink').onclick = async () => {
+        try {
+          const d = await api('/api/my/telegram/link', {method: 'POST'});
+          openModal('Привязать Telegram', `<p>Отправьте боту эту команду в личном чате. Код одноразовый, действует 10 минут.</p><pre style="white-space:pre-wrap;overflow-wrap:anywhere">/start ${esc(d.code)}</pre>${d.url ? `<a class="btn primary" href="${esc(d.url)}" target="_blank" rel="noopener">Открыть бота ↗</a>` : ''}<button id="telegramCheck" class="btn ghost">Проверить подключение</button>`);
+          $('telegramCheck').onclick = () => { closeModal(); renderProfile() };
+        } catch (err) { toast(err.message, true) }
+      };
+      if ($('telegramUnlink')) $('telegramUnlink').onclick = async () => {
+        try { await api('/api/my/telegram', {method: 'DELETE'}); renderProfile() } catch (err) { toast(err.message, true) }
+      };
+    } catch (err) { if ($('telegramSettings')) $('telegramSettings').textContent = err.message }
+  }
+  if (user.role === 'admin') {
+    try {
+      const d = await api('/api/admin/users');
+      if (!$('accessUsers')) return;
+      $('accessUsers').innerHTML = d.items.map(u => `<div class="row between wrap"><span>${esc(u.nickname || 'Пользователь #' + u.id)} · #${u.id}</span>${u.role === 'admin' ? '<b>Администратор</b>' : `<label>Роль <select data-user-role="${u.id}" style="width:auto"><option value="user" ${u.role === 'user' ? 'selected' : ''}>Пользователь</option><option value="editor" ${u.role === 'editor' ? 'selected' : ''}>Редактор</option></select></label>`}</div>`).join('');
+      $('accessUsers').onchange = async e => {
+        if (!e.target.dataset.userRole) return;
+        try { await api(`/api/admin/users/${e.target.dataset.userRole}/role`, {method: 'PATCH', body: JSON.stringify({role: e.target.value})}); toast('Доступ обновлён') } catch (err) { toast(err.message, true); setupAccessPanel(user) }
+      };
+    } catch (err) { if ($('accessUsers')) $('accessUsers').textContent = err.message }
+  }
 }
 
 start();

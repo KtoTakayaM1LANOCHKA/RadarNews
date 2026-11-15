@@ -1,8 +1,11 @@
 <!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>NewsRadar — события рядом</title>
-<link rel="stylesheet" href="/static/ui.css"><script src="/static/ui.js"></script></head>
+<link rel="stylesheet" href="/static/ui.css?v=0.2.1"><script src="/static/ui.js?v=0.2.1" defer></script></head>
 <body class="is-app">
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
+<section id="boot" class="auth" aria-label="Загрузка приложения">
+  <div class="card auth-card center"><h1>NewsRadar</h1><p id="bootMessage" role="status" aria-live="polite">Открываем приложение…</p><button id="bootRetry" class="btn primary hidden">Повторить попытку</button></div>
+</section>
 
 <!-- Вход: показывается сразу, пока пользователь не авторизован -->
 <section id="auth" class="auth hidden">
@@ -88,5 +91,5 @@
 <div id="modal" class="scrim hidden" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
   <div class="sheet pop"><div class="row between" style="margin-bottom:10px"><h2 id="modalTitle" style="margin:0"></h2><button class="x" id="modalClose" aria-label="Закрыть">✕</button></div><div id="modalBody"></div></div>
 </div>
-<script src="/static/app.js" defer></script>
+<script src="/static/app.js?v=0.2.1" defer></script>
 </body></html>
