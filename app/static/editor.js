@@ -108,9 +108,12 @@ function renderOverview() {
 
 // ---------- Новости: список → событие на весь экран, выход стрелкой ----------
 function renderEvents() {
-  $('eventCards').innerHTML = data.events.filter(matches).map(e => `<button class="item" data-open="${e.id}">
-      <span class="row between"><span class="tag ${esc(e.status)}">${esc(e.status_label)}</span><small>#${e.id} →</small></span>
-      <b>${esc(e.title)}</b><small>${esc(e.topic)} · значимость ${e.importance} · эксклюзив ${e.exclusive_score} · ответов ${e.submission_count}</small></button>`).join('')
+  $('eventCards').innerHTML = data.events.filter(matches).map(e => `<article class="item">
+      <button class="event-open" data-open="${e.id}" aria-label="Открыть новость: ${esc(e.title)}">
+        <span class="row between"><span class="tag ${esc(e.status)}">${esc(e.status_label)}</span><small>#${e.id} →</small></span>
+        <b>${esc(e.title)}</b><small>${esc(e.topic)} · значимость ${e.importance} · эксклюзив ${e.exclusive_score} · ответов ${e.submission_count}</small>
+      </button>
+      <button class="btn danger event-delete" data-delete-event="${e.id}" aria-label="Удалить новость: ${esc(e.title)}">Удалить</button></article>`).join('')
     || '<div class="empty">Новостей не найдено</div>';
 }
 function rewardHint() {
@@ -173,6 +176,23 @@ async function decide(action) {
   } catch (err) { toast(err.message, true); buttons.forEach((b, i) => b.disabled = wasDisabled[i]) }
 }
 
+async function deleteEvent(id) {
+  const event = data?.events.find(e => e.id === id);
+  if (!event) return;
+  if (!confirm(`Удалить новость «${event.title}»? Она исчезнет из редакции, ленты и карты. Действие нельзя отменить.`)) return;
+  const buttons = [...document.querySelectorAll('[data-delete-event]')].filter(b => +b.dataset.deleteEvent === id);
+  buttons.forEach(b => b.disabled = true);
+  try {
+    await api(`/api/editor/events/${id}`, {method: 'DELETE'});
+    toast('Новость удалена');
+    if (current === id) location.hash = 'events';
+    await refresh();
+  } catch (err) {
+    toast(err.message, true);
+    buttons.forEach(b => b.disabled = false);
+  }
+}
+
 // ---------- Задачи для проверки пользователей и подтверждения ----------
 function renderOrders() {
   $('orderCards').innerHTML = data.events.filter(e => e.status === 'order' && e.order && matches(e)).map(e => `<div class="item">
@@ -230,7 +250,8 @@ function renderUsers() {
 // ---------- Общие обработчики нажатий ----------
 document.addEventListener('click', e => {
   const pick = sel => e.target.closest(sel);
-  const open = pick('[data-open]'), decision = pick('[data-decide]'), rev = pick('[data-review]'), per = pick('[data-period]'), mtype = pick('[data-mtype]'), mtopic = pick('[data-mtopic]');
+  const remove = pick('[data-delete-event]'), open = pick('[data-open]'), decision = pick('[data-decide]'), rev = pick('[data-review]'), per = pick('[data-period]'), mtype = pick('[data-mtype]'), mtopic = pick('[data-mtopic]');
+  if (remove) { e.preventDefault(); deleteEvent(+remove.dataset.deleteEvent); return }
   if (open) location.hash = 'event/' + open.dataset.open;
   if (decision) decide(decision.dataset.decide);
   if (rev) review(rev.dataset.review, rev.dataset.accept === '1');
