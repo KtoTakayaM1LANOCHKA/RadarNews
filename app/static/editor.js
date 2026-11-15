@@ -127,7 +127,10 @@ function subCard(s) {
     <div class="row between wrap"><span class="tag ${esc(s.status)}">${LABELS.sub[s.status] || esc(s.status)}</span><span class="muted tiny">${LABELS.kind[s.kind] || esc(s.kind)} · ${esc(s.provider)} · ${when(s.submitted_at)}</span></div>
     <h3>${esc(s.event_title)}</h3><p>${esc(s.text)}</p>
     <span class="muted tiny">Файлов: ${s.media_count}${s.contact_phone ? ` · контакт: ${esc(s.contact_phone)}` : ''}</span>
-    ${s.status === 'pending' && s.kind !== 'tip' ? `<div class="row wrap" style="margin-top:10px"><button class="btn green" data-review="${s.id}" data-accept="1">✓ Принять</button><button class="btn danger" data-review="${s.id}" data-accept="0">✕ Отклонить</button></div>` : ''}</div>`;
+    <div class="row wrap" style="margin-top:10px">
+      ${s.status === 'pending' && s.kind !== 'tip' ? `<button class="btn green" data-review="${s.id}" data-accept="1">✓ Принять</button><button class="btn danger" data-review="${s.id}" data-accept="0">✕ Отклонить</button>` : ''}
+      ${s.kind !== 'tip' ? `<button class="btn danger" data-delete-submission="${s.id}" aria-label="Удалить ответ пользователя №${s.id}">Удалить ответ</button>` : ''}
+    </div></div>`;
 }
 function renderEvent() {
   const e = data.events.find(x => x.id === current);
@@ -211,6 +214,22 @@ async function review(id, accepted) {
   } catch (err) { toast(err.message, true) }
 }
 
+async function deleteSubmission(id) {
+  const submission = data?.submissions.find(s => s.id === id);
+  if (!submission || submission.kind === 'tip') return;
+  if (!confirm(`Удалить ответ №${id} к новости «${submission.event_title}»? Он исчезнет из редакции и профиля пользователя. Действие нельзя отменить.`)) return;
+  const buttons = [...document.querySelectorAll('[data-delete-submission]')].filter(b => +b.dataset.deleteSubmission === id);
+  buttons.forEach(b => b.disabled = true);
+  try {
+    await api(`/api/editor/submissions/${id}`, {method: 'DELETE'});
+    toast('Ответ пользователя удалён');
+    await refresh();
+  } catch (err) {
+    toast(err.message, true);
+    buttons.forEach(b => b.disabled = false);
+  }
+}
+
 // ---------- Карта: OpenStreetMap, фильтры по статусу и тематике ----------
 function renderMap() {
   const topics = [...new Set(data.events.map(e => e.topic))].sort();
@@ -250,8 +269,9 @@ function renderUsers() {
 // ---------- Общие обработчики нажатий ----------
 document.addEventListener('click', e => {
   const pick = sel => e.target.closest(sel);
-  const remove = pick('[data-delete-event]'), open = pick('[data-open]'), decision = pick('[data-decide]'), rev = pick('[data-review]'), per = pick('[data-period]'), mtype = pick('[data-mtype]'), mtopic = pick('[data-mtopic]');
+  const remove = pick('[data-delete-event]'), removeSub = pick('[data-delete-submission]'), open = pick('[data-open]'), decision = pick('[data-decide]'), rev = pick('[data-review]'), per = pick('[data-period]'), mtype = pick('[data-mtype]'), mtopic = pick('[data-mtopic]');
   if (remove) { e.preventDefault(); deleteEvent(+remove.dataset.deleteEvent); return }
+  if (removeSub) { e.preventDefault(); deleteSubmission(+removeSub.dataset.deleteSubmission); return }
   if (open) location.hash = 'event/' + open.dataset.open;
   if (decision) decide(decision.dataset.decide);
   if (rev) review(rev.dataset.review, rev.dataset.accept === '1');
