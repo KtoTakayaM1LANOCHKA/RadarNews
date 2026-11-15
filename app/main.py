@@ -521,7 +521,7 @@ def submit(payload: NewSubmission, session=Depends(member)):
             create_draft(con,event_id)
         else:
             row=con.execute('SELECT status FROM events WHERE id=?',(event_id,)).fetchone()
-            if not row:raise HTTPException(404,'Событие не найдено')
+            if not row or row['status']=='deleted':raise HTTPException(404,'Событие не найдено')
             if payload.kind in ('confirm','refute') and row['status']!='order':
                 raise HTTPException(409,'Для подтверждения нужна открытая задача')
         cur=con.execute('''INSERT INTO submissions(event_id,user_id,kind,text,latitude,longitude,contact_opt_in,submitted_at)
@@ -540,7 +540,7 @@ def my_submissions(session=Depends(member)):
                 (SELECT COALESCE(SUM(points),0) FROM rewards r WHERE r.submission_id=s.id) AS points,
                 (SELECT COALESCE(SUM(money),0) FROM rewards r WHERE r.submission_id=s.id) AS money,
                 (SELECT COUNT(*) FROM rewards r WHERE r.submission_id=s.id AND r.applied=0) AS reward_pending
-                FROM submissions s JOIN events e ON e.id=s.event_id WHERE user_id=? ORDER BY s.id DESC LIMIT 100''',(session['user_id'],)))
+                FROM submissions s JOIN events e ON e.id=s.event_id WHERE s.user_id=? AND e.status!='deleted' ORDER BY s.id DESC LIMIT 100''',(session['user_id'],)))
     return {'items':out,'credits':user['credits'],'user':user}
 
 
@@ -655,16 +655,30 @@ async def analyze(event_id:int, _=Depends(editor)):
 @app.get('/api/editor/events')
 def editor_events(_=Depends(editor)):
     with db() as con:
-        items=[result_event(con,x) for x in con.execute('SELECT * FROM events ORDER BY updated_at DESC, id DESC LIMIT 200')]
+        items=[result_event(con,x) for x in con.execute("SELECT * FROM events WHERE status!='deleted' ORDER BY updated_at DESC, id DESC LIMIT 200")]
         submissions=rows_to_list(con.execute('''SELECT s.*,e.title as event_title,
             (SELECT count(*) FROM media m WHERE m.submission_id=s.id) AS media_count,
             CASE WHEN s.contact_opt_in=1 THEN u.phone ELSE NULL END AS contact_phone
-            FROM submissions s JOIN events e ON e.id=s.event_id LEFT JOIN users u ON u.id=s.user_id ORDER BY s.id DESC LIMIT 200'''))
-        history=rows_to_list(con.execute('SELECT * FROM decisions ORDER BY id DESC LIMIT 100'))
-        drafts=rows_to_list(con.execute('SELECT * FROM drafts ORDER BY id DESC LIMIT 100'))
+            FROM submissions s JOIN events e ON e.id=s.event_id LEFT JOIN users u ON u.id=s.user_id WHERE e.status!='deleted' ORDER BY s.id DESC LIMIT 200'''))
+        history=rows_to_list(con.execute("SELECT d.* FROM decisions d JOIN events e ON e.id=d.event_id WHERE e.status!='deleted' ORDER BY d.id DESC LIMIT 100"))
+        drafts=rows_to_list(con.execute("SELECT d.* FROM drafts d JOIN events e ON e.id=d.event_id WHERE e.status!='deleted' ORDER BY d.id DESC LIMIT 100"))
         users=rows_to_list(con.execute('''SELECT u.id,COALESCE(u.nickname,'Очевидец #'||u.id) AS nickname,u.credits,u.wallet,
             (SELECT count(*) FROM submissions s WHERE s.user_id=u.id) AS submissions FROM users u ORDER BY u.credits DESC,u.id LIMIT 100'''))
     return {'events':items,'submissions':submissions,'history':history,'drafts':drafts,'users':users}
+
+
+@app.delete('/api/editor/events/{event_id}')
+def delete_editor_event(event_id:int, _=Depends(editor)):
+    """Скрыть новость из публикации и редакции, не удаляя историю вознаграждений."""
+    with db() as con:
+        row = con.execute('SELECT status FROM events WHERE id=?', (event_id,)).fetchone()
+        if not row or row['status'] == 'deleted':
+            raise HTTPException(404, 'Новость не найдена')
+        con.execute("UPDATE events SET status='deleted', updated_at=? WHERE id=?", (now(), event_id))
+        con.execute("UPDATE orders SET status='closed' WHERE event_id=? AND status='open'", (event_id,))
+        # Очередь доставки больше не должна уведомлять о скрытом событии.
+        con.execute("UPDATE telegram_deliveries SET status='cancelled' WHERE event_id=? AND status='pending'", (event_id,))
+    return {'deleted': True, 'event_id': event_id}
 
 
 @app.post('/api/editor/events/{event_id}/decision')
@@ -673,7 +687,7 @@ def decision(event_id:int,payload: DecisionIn,_=Depends(editor)):
         raise HTTPException(422, 'Координаты передаются парой')
     with db() as con:
         e=con.execute('SELECT * FROM events WHERE id=?',(event_id,)).fetchone()
-        if not e:raise HTTPException(404,'Событие не найдено')
+        if not e or e['status']=='deleted':raise HTTPException(404,'Событие не найдено')
         if payload.latitude is not None:
             con.execute('UPDATE events SET latitude=?,longitude=?,location_known=1 WHERE id=?', (payload.latitude,payload.longitude,event_id))
         target={'reject':'rejected','publish':'published','revise':'order'}[payload.action]
@@ -719,6 +733,8 @@ def review_submission(submission_id:int,payload: ReviewSubmission,_=Depends(edit
     with db() as con:
         row=con.execute('SELECT * FROM submissions WHERE id=?',(submission_id,)).fetchone()
         if not row:raise HTTPException(404,'Ответ не найден')
+        state=con.execute('SELECT status FROM events WHERE id=?',(row['event_id'],)).fetchone()
+        if not state or state['status']=='deleted':raise HTTPException(404,'Новость удалена')
         if row['status']!='pending': raise HTTPException(409,'Ответ уже рассмотрен')
         status='accepted' if payload.accepted else 'rejected'
         con.execute('UPDATE submissions SET status=? WHERE id=?',(status,submission_id))
