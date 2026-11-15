@@ -252,7 +252,7 @@ def result_event(con, e):
     d['status_label'] = status_description(d['status'])
     d['order'] = con.execute("SELECT id,question,status,reward_points FROM orders WHERE event_id=? AND status='open' ORDER BY id DESC LIMIT 1",(d['id'],)).fetchone()
     d['order'] = dict(d['order']) if d['order'] else None
-    d['submission_count'] = con.execute('SELECT count(*) AS n FROM submissions WHERE event_id=?',(d['id'],)).fetchone()['n']
+    d['submission_count'] = con.execute("SELECT count(*) AS n FROM submissions WHERE event_id=? AND status!='deleted'",(d['id'],)).fetchone()['n']
     return d
 
 
@@ -540,14 +540,14 @@ def my_submissions(session=Depends(member)):
                 (SELECT COALESCE(SUM(points),0) FROM rewards r WHERE r.submission_id=s.id) AS points,
                 (SELECT COALESCE(SUM(money),0) FROM rewards r WHERE r.submission_id=s.id) AS money,
                 (SELECT COUNT(*) FROM rewards r WHERE r.submission_id=s.id AND r.applied=0) AS reward_pending
-                FROM submissions s JOIN events e ON e.id=s.event_id WHERE s.user_id=? AND e.status!='deleted' ORDER BY s.id DESC LIMIT 100''',(session['user_id'],)))
+                FROM submissions s JOIN events e ON e.id=s.event_id WHERE s.user_id=? AND e.status!='deleted' AND s.status!='deleted' ORDER BY s.id DESC LIMIT 100''',(session['user_id'],)))
     return {'items':out,'credits':user['credits'],'user':user}
 
 
 @app.post('/api/submissions/{submission_id}/media')
 async def upload_media(submission_id:int, file: UploadFile=File(...), session=Depends(member)):
     with db() as con:
-        s=con.execute('SELECT user_id FROM submissions WHERE id=?',(submission_id,)).fetchone()
+        s=con.execute("SELECT user_id FROM submissions WHERE id=? AND status!='deleted'",(submission_id,)).fetchone()
         if not s:raise HTTPException(404,'Сообщение не найдено')
         if s['user_id']!=session['user_id']:raise HTTPException(403,'Не ваше сообщение')
         count=con.execute('SELECT count(*) AS n FROM media WHERE submission_id=?',(submission_id,)).fetchone()['n']
@@ -593,7 +593,7 @@ def store_media_data(submission_id:int,data:bytes,content:str,original_name:str)
 @app.get('/api/media/{media_id}')
 def download_media(media_id:int, session=Depends(auth)):
     with db() as con:
-        row=con.execute('''SELECT m.*,s.user_id FROM media m JOIN submissions s ON s.id=m.submission_id WHERE m.id=?''',(media_id,)).fetchone()
+        row=con.execute('''SELECT m.*,s.user_id FROM media m JOIN submissions s ON s.id=m.submission_id WHERE m.id=? AND s.status!='deleted'''',(media_id,)).fetchone()
         if not row:raise HTTPException(404,'Медиа не найдено')
         if session['role'] not in ('editor','admin') and session['user_id']!=row['user_id']:
             raise HTTPException(403,'Нет доступа к медиа')
@@ -604,7 +604,7 @@ def download_media(media_id:int, session=Depends(auth)):
 
 def rule_analysis(con,event_id):
     e=con.execute('SELECT * FROM events WHERE id=?',(event_id,)).fetchone()
-    sub=rows_to_list(con.execute('SELECT kind,text,status FROM submissions WHERE event_id=?',(event_id,)))
+    sub=rows_to_list(con.execute("SELECT kind,text,status FROM submissions WHERE event_id=? AND status!='deleted'",(event_id,)))
     conf=sum(x['kind']=='confirm' for x in sub)
     refu=sum(x['kind']=='refute' for x in sub)
     flags=[]
@@ -635,7 +635,7 @@ async def analyze(event_id:int, _=Depends(editor)):
     with db() as con:
         row=con.execute('SELECT title,summary FROM events WHERE id=?',(event_id,)).fetchone()
         if not row:raise HTTPException(404,'Событие не найдено')
-        submissions=rows_to_list(con.execute('SELECT kind,text FROM submissions WHERE event_id=?',(event_id,)))
+        submissions=rows_to_list(con.execute("SELECT kind,text FROM submissions WHERE event_id=? AND status!='deleted'",(event_id,)))
         result=rule_analysis(con,event_id)
     if os.getenv('OPENAI_API_KEY',''):
         try:
@@ -659,11 +659,11 @@ def editor_events(_=Depends(editor)):
         submissions=rows_to_list(con.execute('''SELECT s.*,e.title as event_title,
             (SELECT count(*) FROM media m WHERE m.submission_id=s.id) AS media_count,
             CASE WHEN s.contact_opt_in=1 THEN u.phone ELSE NULL END AS contact_phone
-            FROM submissions s JOIN events e ON e.id=s.event_id LEFT JOIN users u ON u.id=s.user_id WHERE e.status!='deleted' ORDER BY s.id DESC LIMIT 200'''))
+            FROM submissions s JOIN events e ON e.id=s.event_id LEFT JOIN users u ON u.id=s.user_id WHERE e.status!='deleted' AND s.status!='deleted' ORDER BY s.id DESC LIMIT 200'''))
         history=rows_to_list(con.execute("SELECT d.* FROM decisions d JOIN events e ON e.id=d.event_id WHERE e.status!='deleted' ORDER BY d.id DESC LIMIT 100"))
         drafts=rows_to_list(con.execute("SELECT d.* FROM drafts d JOIN events e ON e.id=d.event_id WHERE e.status!='deleted' ORDER BY d.id DESC LIMIT 100"))
         users=rows_to_list(con.execute('''SELECT u.id,COALESCE(u.nickname,'Очевидец #'||u.id) AS nickname,u.credits,u.wallet,
-            (SELECT count(*) FROM submissions s WHERE s.user_id=u.id) AS submissions FROM users u ORDER BY u.credits DESC,u.id LIMIT 100'''))
+            (SELECT count(*) FROM submissions s WHERE s.user_id=u.id AND s.status!='deleted') AS submissions FROM users u ORDER BY u.credits DESC,u.id LIMIT 100'''))
     return {'events':items,'submissions':submissions,'history':history,'drafts':drafts,'users':users}
 
 
@@ -728,11 +728,26 @@ def decision(event_id:int,payload: DecisionIn,_=Depends(editor)):
     return {'status':target,'analysis':analysis}
 
 
+@app.delete('/api/editor/submissions/{submission_id}')
+def delete_editor_submission(submission_id: int, _=Depends(editor)):
+    """Скрыть ответ пользователя, сохранив историю начислений и решений."""
+    with db() as con:
+        row = con.execute('SELECT event_id,kind,status FROM submissions WHERE id=?', (submission_id,)).fetchone()
+        if not row or row['status'] == 'deleted':
+            raise HTTPException(404, 'Ответ не найден')
+        if row['kind'] not in ('confirm', 'refute'):
+            raise HTTPException(409, 'Исходную новость удаляйте во вкладке «Новости»')
+        con.execute("UPDATE submissions SET status='deleted' WHERE id=?", (submission_id,))
+        con.execute("UPDATE telegram_deliveries SET status='cancelled' WHERE submission_id=? AND kind='evidence' AND status='pending'", (submission_id,))
+        con.execute('UPDATE events SET updated_at=? WHERE id=?', (now(), row['event_id']))
+    return {'deleted': True, 'submission_id': submission_id}
+
+
 @app.post('/api/editor/submissions/{submission_id}/review')
 def review_submission(submission_id:int,payload: ReviewSubmission,_=Depends(editor)):
     with db() as con:
         row=con.execute('SELECT * FROM submissions WHERE id=?',(submission_id,)).fetchone()
-        if not row:raise HTTPException(404,'Ответ не найден')
+        if not row or row['status']=='deleted':raise HTTPException(404,'Ответ не найден')
         state=con.execute('SELECT status FROM events WHERE id=?',(row['event_id'],)).fetchone()
         if not state or state['status']=='deleted':raise HTTPException(404,'Новость удалена')
         if row['status']!='pending': raise HTTPException(409,'Ответ уже рассмотрен')
@@ -763,7 +778,7 @@ def event_history(event_id:int,_=Depends(editor)):
         if not con.execute('SELECT id FROM events WHERE id=?',(event_id,)).fetchone(): raise HTTPException(404,'Нет события')
         return {'decisions':rows_to_list(con.execute('SELECT * FROM decisions WHERE event_id=? ORDER BY id DESC',(event_id,))),
                 'analyses':rows_to_list(con.execute('SELECT * FROM analyses WHERE event_id=? ORDER BY id DESC',(event_id,))),
-                'submissions':rows_to_list(con.execute('SELECT id,kind,text,status,submitted_at FROM submissions WHERE event_id=?',(event_id,)))}
+                'submissions':rows_to_list(con.execute("SELECT id,kind,text,status,submitted_at FROM submissions WHERE event_id=? AND status!='deleted'",(event_id,)))}
 
 
 @app.post('/api/discovery/search')
@@ -876,7 +891,7 @@ async def ingest_bot_media(submission_id:int, file: UploadFile=File(...),
     if not expected or not x_ingest_key or not hmac.compare_digest(expected,x_ingest_key):
         raise HTTPException(403,'Интеграция не настроена')
     with db() as con:
-        row=con.execute('SELECT provider FROM submissions WHERE id=?',(submission_id,)).fetchone()
+        row=con.execute("SELECT provider FROM submissions WHERE id=? AND status!='deleted'",(submission_id,)).fetchone()
         if not row or row['provider']=='web':raise HTTPException(404,'Сообщение бота не найдено')
         if con.execute('SELECT count(*) AS n FROM media WHERE submission_id=?',(submission_id,)).fetchone()['n']>=5:
             raise HTTPException(422,'Не более 5 файлов')
