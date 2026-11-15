@@ -205,6 +205,69 @@ def test_editor_delete_published_news_keeps_earned_rewards():
     assert (before['pending_points'], before['pending_money']) == (after['pending_points'], after['pending_money'])
 
 
+
+def test_editor_can_delete_user_answers():
+    user = make_user('+79990000021')
+    editor = make_editor()
+    created = client.post('/api/submissions', headers=user, json={
+        'title': 'Новость с удаляемыми ответами',
+        'text': 'Проверяем удаление пользовательских подтверждений',
+        'kind': 'tip',
+    })
+    assert created.status_code == 200, created.text
+    eid = created.json()['event_id']
+    assert client.post(f'/api/editor/events/{eid}/decision', headers=editor, json={
+        'action': 'revise', 'question': 'Нужны подтверждения'
+    }).status_code == 200
+    answer = client.post('/api/submissions', headers=user, json={
+        'event_id': eid, 'kind': 'confirm', 'text': 'Подтверждаю уже известные сведения'
+    })
+    assert answer.status_code == 200, answer.text
+    sid = answer.json()['id']
+    url = f'/api/editor/submissions/{sid}'
+    assert client.delete(url).status_code == 401
+    assert client.delete(url, headers=user).status_code == 403
+    assert any(s['id'] == sid for s in client.get('/api/editor/events', headers=editor).json()['submissions'])
+    assert client.delete(url, headers=editor).json() == {'deleted': True, 'submission_id': sid}
+    assert client.delete(url, headers=editor).status_code == 404
+    state = client.get('/api/editor/events', headers=editor).json()
+    assert not any(s['id'] == sid for s in state['submissions'])
+    event = next(e for e in state['events'] if e['id'] == eid)
+    assert event['submission_count'] == 1  # исходное сообщение осталось
+    assert client.post(url + '/review', headers=editor, json={'accepted': True}).status_code == 404
+    assert not any(s['id'] == sid for s in client.get('/api/my/submissions', headers=user).json()['items'])
+    assert not any(s['id'] == sid for s in client.get(f'/api/events/{eid}/history', headers=editor).json()['submissions'])
+    assert client.delete(f'/api/editor/submissions/{created.json()["id"]}', headers=editor).status_code == 409
+
+
+def test_delete_reviewed_answer_preserves_rewards():
+    user = make_user('+79990000022')
+    editor = make_editor()
+    created = client.post('/api/submissions', headers=user, json={
+        'title': 'Событие для подтверждения',
+        'text': 'Проверяем сохранность вознаграждений при удалении',
+    })
+    eid = created.json()['event_id']
+    assert client.post(f'/api/editor/events/{eid}/decision', headers=editor, json={
+        'action': 'revise', 'question': 'Нужны подтверждения'
+    }).status_code == 200
+    answer = client.post('/api/submissions', headers=user, json={
+        'event_id': eid, 'kind': 'refute', 'text': 'Уже имеющиеся сведения это опровергают'
+    })
+    sid = answer.json()['id']
+    assert client.post(f'/api/editor/submissions/{sid}/review',
+                       headers=editor, json={'accepted': True}).status_code == 200
+    before = client.get('/api/auth/me', headers=user).json()
+    assert before['pending_points'] > 0
+    assert client.delete(f'/api/editor/submissions/{sid}', headers=editor).status_code == 200
+    after = client.get('/api/auth/me', headers=user).json()
+    assert (after['pending_points'], after['pending_money']) == (before['pending_points'], before['pending_money'])
+    from app.main import db
+    with db() as con:
+        assert con.execute('SELECT status FROM submissions WHERE id=?', (sid,)).fetchone()['status'] == 'deleted'
+        assert con.execute('SELECT COUNT(*) FROM rewards WHERE submission_id=?', (sid,)).fetchone()[0] > 0
+
+
 def test_reputation_rewards_and_wallet():
     user=make_user('+79990000007'); editor=make_editor()
     rules=client.get('/api/config').json()['rewards']
